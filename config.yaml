@@ -1,0 +1,52 @@
+# Swing Trading Agent POC — all non-secret configuration.
+# Secrets (API keys, if ever added) go in .env — see .env.example.
+
+run:
+  # Default mode when not given on the CLI: paper | backtest
+  default_mode: paper
+
+database:
+  # Separate DB files so backtests never contaminate paper-mode state.
+  paper_path: swing_paper.db
+  backtest_path: swing_backtest.db
+
+screener:
+  # finvizfinance filter values (Finviz screener filter names).
+  filters:
+    Index: "S&P 500"
+    Price: "Over $20"
+    Average Volume: "Over 500K"
+  top_n: 10
+  retries: 3
+  backoff_seconds: 2.0
+  timeout_seconds: 30
+
+data:
+  # Fetch window (calendar days) for daily OHLCV via yfinance (auto_adjust=True:
+  # splits/dividends are folded into prices).
+  fetch_window_days: 90
+  # Minimum trading days of history before a ticker is eligible for signals.
+  min_history_days: 25
+  # Always refresh the most recent N cached bars (today's bar can be partial).
+  refresh_last_bars: 1
+  retries: 2
+  backoff_seconds: 1.5
+  benchmark_ticker: SPY
+
+strategy:
+  name: sma_crossover
+  params:
+    fast: 10
+    slow: 20
+    max_hold_days: 5
+
+sizing:
+  initial_cash: 100000.0
+  # Fixed fraction of *current cash* per new position.
+  cash_fraction: 0.10
+  max_concurrent_positions: 8
+  min_notional: 500.0
+
+costs:
+  # Flat slippage applied against the trader on every fill. Commission = $0.
+  slippage_bps: 5.0
