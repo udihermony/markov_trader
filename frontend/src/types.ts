@@ -19,8 +19,69 @@ export interface Strategy {
   id: number
   name: string
   spec_version: number
-  spec: Record<string, unknown>
+  spec: StrategySpec
+  trust_label: TrustLabel
   created_at: string
+}
+
+export type TrustLabel = 'point_in_time' | 'reconstructable' | 'live_only'
+
+export type NodeKind = 'universe' | 'trigger' | 'confirm' | 'veto' | 'exit' | 'size'
+
+export interface NodeSpec {
+  id: string
+  kind: NodeKind
+  type: string
+  params: Record<string, unknown>
+  on_missing?: 'fail_open' | 'fail_closed' | null
+}
+
+export interface SourceRef {
+  id: string
+  type: string
+  params?: Record<string, unknown>
+}
+
+export interface StrategySpec {
+  spec_version: 2
+  name: string
+  sources: SourceRef[]
+  nodes: NodeSpec[]
+  edges: [string, string][]
+  costs?: Record<string, unknown>
+}
+
+// GET /node-types
+export interface ParamField {
+  name: string
+  type: 'string' | 'number' | 'enum' | 'ticker_list' | 'expression'
+  label: string
+  options: string[] | null
+  default: unknown
+}
+
+export interface NodeTypeInfo {
+  type: string
+  allowed_kinds: NodeKind[]
+  maturity: 'standard' | 'experimental' | 'AI'
+  params_schema: ParamField[]
+}
+
+// POST /strategies/preview
+export interface FunnelStage {
+  node_id: string
+  kind: NodeKind
+  type: string
+  description: string
+  candidates_before: number
+  candidates_after: number
+  missing_data_count: number
+}
+
+export interface PreviewResponse {
+  stages: FunnelStage[]
+  trust_label: TrustLabel
+  descriptions: Record<string, string>
 }
 
 export interface OrderRow {

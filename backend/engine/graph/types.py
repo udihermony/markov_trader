@@ -73,6 +73,22 @@ class NodeResult:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class FunnelStageResult:
+    """One stage of DESIGN.md §3's funnel view: `503 → 10 → 3 → 2 → 1`,
+    plus a missing-data count where a node's source has partial coverage
+    and a plain-language description of what the (already-configured) node
+    does."""
+
+    node_id: str
+    kind: str
+    type: str
+    description: str
+    candidates_before: int
+    candidates_after: int
+    missing_data_count: int
+
+
 class UniverseNode(Protocol):
     def filter(self, candidates: list[str], as_of: date) -> list[str]: ...
 

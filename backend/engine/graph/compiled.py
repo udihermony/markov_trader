@@ -6,11 +6,22 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
-from backend.engine.graph.registry import build_node
+from backend.engine.graph.registry import build_node, get_node_type
 from backend.engine.graph.spec import NodeSpec, StrategySpec
-from backend.engine.graph.types import FeatureView, NodeContext, NodeResult, Position, PortfolioView
+from backend.engine.graph.types import (
+    FeatureView,
+    FunnelStageResult,
+    NodeContext,
+    NodeResult,
+    Position,
+    PortfolioView,
+)
 from backend.engine.graph.validator import validate_spec
-from backend.sources.registry import SourceRegistry
+from backend.sources.registry import SourceRegistry, TrustClass
+
+# Weakest first — DESIGN.md §4.2: "a strategy is only as trustworthy as its
+# weakest source."
+TRUST_ORDER = [TrustClass.LIVE_ONLY, TrustClass.RECONSTRUCTABLE, TrustClass.POINT_IN_TIME]
 
 
 def _topological_order(node_ids: list[str], edges: list[tuple[str, str]]) -> list[str]:
@@ -100,3 +111,55 @@ class CompiledGraph:
     def size(self, ticker: str, as_of: date, portfolio: PortfolioView) -> float:
         ctx = self._ctx(ticker, as_of, None, portfolio)
         return self._nodes[self._size_id].size(ctx)
+
+    def evaluate_funnel(self, as_of: date) -> list[FunnelStageResult]:
+        """DESIGN.md §3's funnel view — `503 → 10 → 3 → 2 → 1` — for the
+        M6 builder's live preview. Unlike `evaluate_entry` (one ticker),
+        this evaluates *every* current candidate against each node and
+        narrows the set, so it's O(nodes × candidates); fine for a
+        human-paced preview, not meant for the daily orchestrator loop."""
+        stages: list[FunnelStageResult] = []
+        candidates: list[str] = []
+        portfolio = PortfolioView(cash=0.0, open_position_count=0)
+
+        for nid in self._universe_order:
+            node_spec = self._node_specs[nid]
+            before = len(candidates)
+            candidates = self._nodes[nid].filter(candidates, as_of)
+            stages.append(FunnelStageResult(
+                node_id=nid, kind=node_spec.kind, type=node_spec.type,
+                description=get_node_type(node_spec.type).describe(node_spec.params),
+                candidates_before=before, candidates_after=len(candidates), missing_data_count=0,
+            ))
+
+        for nid in self._decision_order:
+            node_spec = self._node_specs[nid]
+            before = len(candidates)
+            survivors: list[str] = []
+            missing = 0
+            for ticker in candidates:
+                ctx = self._ctx(ticker, as_of, None, portfolio)
+                raw_result = self._nodes[nid].evaluate(ctx)
+                if raw_result.missing:
+                    missing += 1
+                if _apply_on_missing(raw_result, node_spec).passed:
+                    survivors.append(ticker)
+            candidates = survivors
+            stages.append(FunnelStageResult(
+                node_id=nid, kind=node_spec.kind, type=node_spec.type,
+                description=get_node_type(node_spec.type).describe(node_spec.params),
+                candidates_before=before, candidates_after=len(candidates), missing_data_count=missing,
+            ))
+
+        return stages
+
+    @property
+    def trust_label(self) -> TrustClass:
+        """The weakest trust class among the graph's declared sources
+        (DESIGN.md §4.2). Computed fresh from the registry each time — a
+        source's trust class is a registry property, not something to
+        duplicate onto a saved strategy row."""
+        labels = [self.registry.get(source_type)[0].trust_class for source_type in self.source_aliases.values()]
+        if not labels:
+            return TrustClass.POINT_IN_TIME
+        return min(labels, key=TRUST_ORDER.index)

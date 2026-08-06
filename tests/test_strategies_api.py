@@ -101,3 +101,69 @@ def test_get_missing_strategy_returns_404(client):
     headers = _auth_headers(client, "c@example.com")
     res = client.get("/strategies/999999", headers=headers)
     assert res.status_code == 404
+
+
+def test_created_strategy_has_trust_label(client):
+    headers = _auth_headers(client, "trust@example.com")
+    res = client.post("/strategies", json={"name": "SMA", "spec": VALID_SPEC}, headers=headers)
+    assert res.json()["trust_label"] == "point_in_time"  # price_bars is point_in_time
+
+
+def test_preview_valid_spec_returns_stages_without_persisting(client):
+    headers = _auth_headers(client, "preview1@example.com")
+    res = client.post("/strategies/preview", json={"spec": VALID_SPEC}, headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["trust_label"] == "point_in_time"
+    kinds = [s["kind"] for s in body["stages"]]
+    assert "universe" in kinds
+    assert "trigger" in kinds
+    for stage in body["stages"]:
+        assert stage["description"]  # plain-language sentence present
+
+    # exit/size nodes aren't part of the funnel-narrowing `stages`, but
+    # still get a description (VALID_SPEC's x1, x2, s1 nodes)
+    assert body["descriptions"]["x1"]
+    assert body["descriptions"]["x2"]
+    assert body["descriptions"]["s1"]
+
+    # nothing was persisted
+    listed = client.get("/strategies", headers=headers).json()
+    assert len(listed) == 1  # just the auto-created benchmark strategy
+
+
+def test_preview_invalid_spec_rejected(client):
+    headers = _auth_headers(client, "preview2@example.com")
+    res = client.post("/strategies/preview", json={"spec": CYCLIC_SPEC}, headers=headers)
+    assert res.status_code == 422
+
+
+def test_update_strategy_spec(client):
+    headers = _auth_headers(client, "update1@example.com")
+    created = client.post("/strategies", json={"name": "Original", "spec": VALID_SPEC}, headers=headers).json()
+
+    renamed_spec = {**VALID_SPEC, "name": "renamed"}
+    res = client.put(
+        f"/strategies/{created['id']}", json={"name": "Updated Name", "spec": renamed_spec}, headers=headers
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["name"] == "Updated Name"
+    assert body["spec"]["name"] == "renamed"
+
+
+def test_update_strategy_invalid_spec_rejected(client):
+    headers = _auth_headers(client, "update2@example.com")
+    created = client.post("/strategies", json={"name": "Original", "spec": VALID_SPEC}, headers=headers).json()
+
+    res = client.put(f"/strategies/{created['id']}", json={"spec": CYCLIC_SPEC}, headers=headers)
+    assert res.status_code == 422
+
+
+def test_update_unowned_strategy_returns_404(client):
+    headers_a = _auth_headers(client, "update3a@example.com")
+    headers_b = _auth_headers(client, "update3b@example.com")
+    created = client.post("/strategies", json={"name": "A's", "spec": VALID_SPEC}, headers=headers_a).json()
+
+    res = client.put(f"/strategies/{created['id']}", json={"name": "Hijacked"}, headers=headers_b)
+    assert res.status_code == 404

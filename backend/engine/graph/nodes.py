@@ -9,15 +9,48 @@ actually needs them.
 from __future__ import annotations
 
 import operator
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-from backend.engine.graph.registry import NodeTypeInfo, register_node_type
+from backend.engine.graph.registry import NodeTypeInfo, ParamField, register_node_type
 from backend.engine.graph.types import NodeContext, NodeResult
 from backend.sources.registry import SourceRegistry
 
 _OPS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge, "==": operator.eq}
+_OP_WORDS = {"<": "below", "<=": "at or below", ">": "above", ">=": "at or above", "==": "equal to"}
+
+# M6's funnel builder composes "expression" param fields as a function +
+# window picker (e.g. "10-day average"), never raw expression syntax —
+# CLAUDE.md's no-jargon rule. This is the plain-language side of that:
+# turning "sma(px.close, 10)" back into "the 10-day average" for a node's
+# `describe()` sentence. Only against px.close, since price_bars is still
+# the only source with real data (see plan's M6 context).
+_EXPR_CALL_RE = re.compile(r"^(\w+)\(px\.close,\s*(\d+)\)$")
+_FUNCTION_DESCRIPTIONS = {
+    "sma": "day average",
+    "rolling_mean": "day average",
+    "ema": "day exponential average",
+    "rsi": "day RSI",
+    "pct_change": "day price change",
+    "zscore": "day z-score",
+    "rank": "day rank",
+}
+
+
+def _describe_feature_expr(expr: str) -> str:
+    """Returns a bare noun phrase (no leading article) — call sites decide
+    whether "the"/"The" reads naturally in their sentence."""
+    if expr.strip() == "px.close":
+        return "price"
+    match = _EXPR_CALL_RE.match(expr.strip())
+    if match:
+        func, window = match.group(1), match.group(2)
+        suffix = _FUNCTION_DESCRIPTIONS.get(func)
+        if suffix:
+            return f"{window}-{suffix}"
+    return expr  # fallback for anything unrecognized — better than a blank sentence
 
 
 # ------------------------------------------------------------------ universe
@@ -46,8 +79,16 @@ def _manual_list_factory(params: dict, registry: SourceRegistry) -> ManualListUn
     return ManualListUniverseNode(tickers=list(params["tickers"]))
 
 
-register_node_type(NodeTypeInfo("finviz_screen", frozenset({"universe"}), "standard", _finviz_screen_factory))
-register_node_type(NodeTypeInfo("manual_list", frozenset({"universe"}), "standard", _manual_list_factory))
+register_node_type(NodeTypeInfo(
+    "finviz_screen", frozenset({"universe"}), "standard", _finviz_screen_factory,
+    params_schema=[],
+    describe=lambda params: "Screens for liquid S&P 500 stocks.",
+))
+register_node_type(NodeTypeInfo(
+    "manual_list", frozenset({"universe"}), "standard", _manual_list_factory,
+    params_schema=[ParamField("tickers", "ticker_list", "Tickers to watch")],
+    describe=lambda params: f"Watches only: {', '.join(params.get('tickers', []))}.",
+))
 
 
 # ------------------------------------------------------------------- generic
@@ -122,10 +163,30 @@ def _threshold_factory(params: dict, registry: SourceRegistry) -> ThresholdNode:
     return ThresholdNode(feature=params["feature"], op=params["op"], value=params["value"])
 
 
-register_node_type(NodeTypeInfo("cross", frozenset({"trigger", "exit"}), "standard", _cross_factory))
-register_node_type(
-    NodeTypeInfo("threshold", frozenset({"trigger", "confirm", "veto"}), "standard", _threshold_factory)
-)
+register_node_type(NodeTypeInfo(
+    "cross", frozenset({"trigger", "exit"}), "standard", _cross_factory,
+    params_schema=[
+        ParamField("a", "expression", "First value"),
+        ParamField("b", "expression", "Second value"),
+        ParamField("direction", "enum", "Direction", options=["up", "down"]),
+    ],
+    describe=lambda params: (
+        f"The {_describe_feature_expr(params['a'])} crosses "
+        f"{'above' if params['direction'] == 'up' else 'below'} "
+        f"the {_describe_feature_expr(params['b'])}."
+    ),
+))
+register_node_type(NodeTypeInfo(
+    "threshold", frozenset({"trigger", "confirm", "veto"}), "standard", _threshold_factory,
+    params_schema=[
+        ParamField("feature", "expression", "Value to check"),
+        ParamField("op", "enum", "Comparison", options=list(_OPS.keys())),
+        ParamField("value", "number", "Threshold"),
+    ],
+    describe=lambda params: (
+        f"The {_describe_feature_expr(params['feature'])} is {_OP_WORDS[params['op']]} {params['value']}."
+    ),
+))
 
 
 # ---------------------------------------------------------------------- exit
@@ -163,7 +224,17 @@ def _time_stop_factory(params: dict, registry: SourceRegistry) -> TimeStopExitNo
     return TimeStopExitNode(max_hold_days=params["max_hold_days"], calendar_feature=params["calendar_feature"])
 
 
-register_node_type(NodeTypeInfo("time_stop", frozenset({"exit"}), "standard", _time_stop_factory))
+register_node_type(NodeTypeInfo(
+    "time_stop", frozenset({"exit"}), "standard", _time_stop_factory,
+    # `calendar_feature` is deliberately NOT in the form schema — "what
+    # defines the trading calendar" is implementation plumbing, not a
+    # concept a non-trader user should have to think about (CLAUDE.md: "if
+    # a concept can't be explained in one sentence, it doesn't get a
+    # control"). The frontend always injects calendar_feature="px.close"
+    # itself when assembling this node's params before saving/previewing.
+    params_schema=[ParamField("max_hold_days", "number", "Max holding days", default=5)],
+    describe=lambda params: f"Automatically exits after {params['max_hold_days']} trading days.",
+))
 
 
 # ------------------------------------------------------- buy-and-hold primitives
@@ -196,8 +267,14 @@ def _never_factory(params: dict, registry: SourceRegistry) -> NeverExitNode:
     return NeverExitNode()
 
 
-register_node_type(NodeTypeInfo("always", frozenset({"trigger"}), "standard", _always_factory))
-register_node_type(NodeTypeInfo("never", frozenset({"exit"}), "standard", _never_factory))
+register_node_type(NodeTypeInfo(
+    "always", frozenset({"trigger"}), "standard", _always_factory,
+    params_schema=[], describe=lambda params: "Always proceeds.",
+))
+register_node_type(NodeTypeInfo(
+    "never", frozenset({"exit"}), "standard", _never_factory,
+    params_schema=[], describe=lambda params: "Never fires.",
+))
 
 
 # ---------------------------------------------------------------------- size
@@ -213,4 +290,8 @@ def _fixed_fraction_factory(params: dict, registry: SourceRegistry) -> FixedFrac
     return FixedFractionSizeNode(fraction=params["fraction"])
 
 
-register_node_type(NodeTypeInfo("fixed_fraction", frozenset({"size"}), "standard", _fixed_fraction_factory))
+register_node_type(NodeTypeInfo(
+    "fixed_fraction", frozenset({"size"}), "standard", _fixed_fraction_factory,
+    params_schema=[ParamField("fraction", "number", "Fraction of cash per trade", default=0.1)],
+    describe=lambda params: f"Invests {params['fraction'] * 100:.0f}% of available cash per trade.",
+))

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../lib/api'
 import type { Strategy, Wallet } from '../types'
 import { Button } from '../components/ui/Button'
@@ -68,12 +68,13 @@ export function CreateWalletPage() {
                 </option>
               ))}
             </select>
-            {strategies && strategies.length === 1 && (
-              <p className="text-xs text-slate-400 mt-1">
-                Only your default benchmark strategy exists so far — the strategy builder is coming in a later
-                milestone.
-              </p>
-            )}
+            <p className="text-xs text-slate-400 mt-1">
+              Don't see the one you want?{' '}
+              <Link to="/strategies/new" className="underline font-medium text-slate-600">
+                Build a new strategy
+              </Link>
+              .
+            </p>
           </div>
           <div>
             <label className="text-xs font-medium text-slate-500 mb-1 block">Starting balance</label>

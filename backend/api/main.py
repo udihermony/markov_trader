@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import backend.engine.graph.nodes  # noqa: F401  registers the node type library
-from backend.api.routers import auth, orders, strategies, wallets
+from backend.api.routers import auth, node_types, orders, strategies, wallets
 
 app = FastAPI(title="Markov Trader API")
 app.add_middleware(
@@ -20,6 +20,7 @@ app.include_router(auth.router)
 app.include_router(strategies.router)
 app.include_router(wallets.router)
 app.include_router(orders.router)
+app.include_router(node_types.router)
 
 
 @app.get("/health")

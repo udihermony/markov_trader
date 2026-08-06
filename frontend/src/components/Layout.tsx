@@ -30,6 +30,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <nav className="flex gap-1">
               <NavItem to="/">Today</NavItem>
               <NavItem to="/wallets">Wallets</NavItem>
+              <NavItem to="/strategies">Strategies</NavItem>
             </nav>
           </div>
           <Button variant="ghost" onClick={logout}>

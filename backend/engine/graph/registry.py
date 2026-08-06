@@ -11,7 +11,7 @@ type factories are stateless pure functions with no session to bind, so
 self-registration at import time here is safe and conventional."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal
 
 from backend.engine.graph.spec import NodeSpec
@@ -21,11 +21,28 @@ Maturity = Literal["standard", "experimental", "AI"]
 
 
 @dataclass(frozen=True)
+class ParamField:
+    """One field in a node type's param form (M6's funnel builder). Kept
+    deliberately small — just enough for a generic, schema-driven form
+    renderer, not a general JSON-schema system."""
+
+    name: str
+    type: Literal["string", "number", "enum", "ticker_list", "expression"]
+    label: str
+    options: list[str] | None = None   # for "enum"
+    default: object | None = None
+
+
+@dataclass(frozen=True)
 class NodeTypeInfo:
     type: str
     allowed_kinds: frozenset[str]
     maturity: Maturity
     factory: Callable[[dict, SourceRegistry], object]
+    params_schema: list[ParamField] = field(default_factory=list)
+    # Plain-language sentence describing a *configured* node (params already
+    # filled in) — DESIGN.md's funnel "plain-language sentences" per stage.
+    describe: Callable[[dict], str] = lambda params: ""
 
 
 _NODE_TYPES: dict[str, NodeTypeInfo] = {}

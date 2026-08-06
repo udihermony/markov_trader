@@ -11,7 +11,13 @@ from backend.engine.graph.spec import NodeSpec, SourceRef, StrategySpec
 from backend.engine.graph.types import NodeContext, NodeResult, PortfolioView, Position
 from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
 from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
-from backend.sources.registry import SourceRegistry
+from backend.sources.registry import (
+    AlignmentPolicy,
+    FeatureSpec,
+    SourceRegistry,
+    SourceSpec,
+    TrustClass,
+)
 
 import backend.engine.graph.nodes  # noqa: F401  registers the 6 real node types
 
@@ -158,3 +164,90 @@ def test_on_missing_fail_closed_fails(db_session):
     portfolio = PortfolioView(cash=100_000.0, open_position_count=0)
     result = graph.evaluate_entry("AAA", date(2026, 1, 15), portfolio)
     assert not result.passed
+
+
+# --- evaluate_funnel (M6) ---
+
+
+def test_evaluate_funnel_narrows_candidates_stage_by_stage(db_session):
+    # AAA crosses up; BBB stays flat (no signal).
+    aaa_closes = [100.0] * 10 + [90.0, 90.0, 130.0]
+    bbb_closes = [100.0] * 13
+    make_bars(db_session, "AAA", aaa_closes)
+    dates = make_bars(db_session, "BBB", bbb_closes)
+    reg = build_registry(db_session)
+    graph = CompiledGraph(make_spec(["AAA", "BBB"]), reg)
+
+    stages = graph.evaluate_funnel(dates[-1])
+
+    universe_stage = next(s for s in stages if s.kind == "universe")
+    assert universe_stage.candidates_before == 0
+    assert universe_stage.candidates_after == 2
+
+    trigger_stage = next(s for s in stages if s.kind == "trigger")
+    assert trigger_stage.candidates_before == 2
+    assert trigger_stage.candidates_after == 1  # only AAA survives
+    assert trigger_stage.description  # plain-language sentence present
+    assert trigger_stage.missing_data_count == 0
+
+
+def test_evaluate_funnel_counts_missing_data(db_session):
+    spec = StrategySpec(
+        name="missing-data-test",
+        sources=[SourceRef(id="px", type="price_bars")],
+        nodes=[
+            NodeSpec(id="u1", kind="universe", type="manual_list", params={"tickers": ["AAA"]}),
+            NodeSpec(id="t1", kind="trigger", type="always_missing", params={}),
+            NodeSpec(id="x1", kind="exit", type="time_stop",
+                     params={"max_hold_days": 5, "calendar_feature": "px.close"}),
+            NodeSpec(id="s1", kind="size", type="fixed_fraction", params={"fraction": 0.1}),
+        ],
+        edges=[("u1", "t1")],
+    )
+    reg = build_registry(db_session)
+    graph = CompiledGraph(spec, reg)
+
+    stages = graph.evaluate_funnel(date(2026, 1, 15))
+
+    trigger_stage = next(s for s in stages if s.kind == "trigger")
+    assert trigger_stage.missing_data_count == 1
+    assert trigger_stage.candidates_after == 0  # no on_missing policy set -> raw passed=False stands
+
+
+def test_trust_label_reflects_weakest_source(db_session):
+    reg = build_registry(db_session)
+
+    class _FakeWeakAdapter:
+        spec = SourceSpec(
+            id="fake_reconstructable",
+            features={"value": FeatureSpec("value", "float")},
+            trust_class=TrustClass.RECONSTRUCTABLE,
+            native_frequency="daily",
+            alignment=AlignmentPolicy(native_frequency="daily"),
+            coverage_note="test double",
+        )
+
+    reg.register(_FakeWeakAdapter())
+
+    spec = StrategySpec(
+        name="weak-source-test",
+        sources=[
+            SourceRef(id="px", type="price_bars"),
+            SourceRef(id="weak", type="fake_reconstructable"),
+        ],
+        nodes=[
+            NodeSpec(id="u1", kind="universe", type="manual_list", params={"tickers": ["AAA"]}),
+            NodeSpec(id="t1", kind="trigger", type="always", params={}),
+            NodeSpec(id="x1", kind="exit", type="never", params={}),
+            NodeSpec(id="s1", kind="size", type="fixed_fraction", params={"fraction": 0.1}),
+        ],
+        edges=[("u1", "t1")],
+    )
+    graph = CompiledGraph(spec, reg)
+    assert graph.trust_label == TrustClass.RECONSTRUCTABLE  # weaker than price_bars' point_in_time
+
+
+def test_trust_label_point_in_time_when_only_strong_sources(db_session):
+    reg = build_registry(db_session)
+    graph = CompiledGraph(make_spec(["AAA"]), reg)
+    assert graph.trust_label == TrustClass.POINT_IN_TIME
