@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_current_user, get_db
-from backend.db.models import Strategy, User, Wallet
+from backend.db.models import EquitySnapshot, Fill, Position, Strategy, User, Wallet
 
 router = APIRouter(prefix="/wallets", tags=["wallets"])
 
@@ -50,6 +50,34 @@ class WalletResponse(BaseModel):
     retired_at: datetime | None
 
 
+class PositionResponse(BaseModel):
+    id: int
+    ticker: str
+    shares: int
+    avg_entry_price: float
+    entry_date: date
+    entry_reason: str | None
+
+
+class FillResponse(BaseModel):
+    id: int
+    timestamp: datetime
+    ticker: str
+    action: str
+    shares: int
+    fill_price: float
+    cost_bps_applied: float
+    reason: str
+
+
+class EquitySnapshotResponse(BaseModel):
+    date: date
+    cash: float
+    positions_value: float
+    total_equity: float
+    benchmark_equity: float | None
+
+
 def _to_response(wallet: Wallet) -> WalletResponse:
     return WalletResponse(
         id=wallet.id, name=wallet.name, strategy_id=wallet.strategy_id,
@@ -57,6 +85,15 @@ def _to_response(wallet: Wallet) -> WalletResponse:
         start_date=wallet.start_date, status=wallet.status, is_benchmark=wallet.is_benchmark,
         created_at=wallet.created_at, retired_at=wallet.retired_at,
     )
+
+
+def _get_owned_wallet(wallet_id: int, user: User, db: Session) -> Wallet:
+    wallet = db.execute(
+        select(Wallet).where(Wallet.id == wallet_id, Wallet.user_id == user.id)
+    ).scalar_one_or_none()
+    if wallet is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="wallet not found")
+    return wallet
 
 
 def create_default_benchmark_wallet(db: Session, user: User) -> Wallet:
@@ -117,23 +154,14 @@ def list_wallets(user: User = Depends(get_current_user), db: Session = Depends(g
 def get_wallet(
     wallet_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> WalletResponse:
-    wallet = db.execute(
-        select(Wallet).where(Wallet.id == wallet_id, Wallet.user_id == user.id)
-    ).scalar_one_or_none()
-    if wallet is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="wallet not found")
-    return _to_response(wallet)
+    return _to_response(_get_owned_wallet(wallet_id, user, db))
 
 
 @router.post("/{wallet_id}/retire", response_model=WalletResponse)
 def retire_wallet(
     wallet_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> WalletResponse:
-    wallet = db.execute(
-        select(Wallet).where(Wallet.id == wallet_id, Wallet.user_id == user.id)
-    ).scalar_one_or_none()
-    if wallet is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="wallet not found")
+    wallet = _get_owned_wallet(wallet_id, user, db)
     if wallet.is_benchmark:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="the benchmark wallet cannot be retired"
@@ -144,3 +172,56 @@ def retire_wallet(
         db.commit()
         db.refresh(wallet)
     return _to_response(wallet)
+
+
+@router.get("/{wallet_id}/positions", response_model=list[PositionResponse])
+def get_wallet_positions(
+    wallet_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[PositionResponse]:
+    wallet = _get_owned_wallet(wallet_id, user, db)
+    positions = db.execute(
+        select(Position).where(Position.wallet_id == wallet.id).order_by(Position.ticker)
+    ).scalars().all()
+    return [
+        PositionResponse(
+            id=p.id, ticker=p.ticker, shares=p.shares, avg_entry_price=float(p.avg_entry_price),
+            entry_date=p.entry_date, entry_reason=p.entry_reason,
+        )
+        for p in positions
+    ]
+
+
+@router.get("/{wallet_id}/fills", response_model=list[FillResponse])
+def get_wallet_fills(
+    wallet_id: int, limit: int = 50,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+) -> list[FillResponse]:
+    wallet = _get_owned_wallet(wallet_id, user, db)
+    fills = db.execute(
+        select(Fill).where(Fill.wallet_id == wallet.id).order_by(Fill.id.desc()).limit(limit)
+    ).scalars().all()
+    return [
+        FillResponse(
+            id=f.id, timestamp=f.timestamp, ticker=f.ticker, action=f.action, shares=f.shares,
+            fill_price=float(f.fill_price), cost_bps_applied=float(f.cost_bps_applied), reason=f.reason,
+        )
+        for f in fills
+    ]
+
+
+@router.get("/{wallet_id}/equity-snapshots", response_model=list[EquitySnapshotResponse])
+def get_wallet_equity_snapshots(
+    wallet_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[EquitySnapshotResponse]:
+    wallet = _get_owned_wallet(wallet_id, user, db)
+    snapshots = db.execute(
+        select(EquitySnapshot).where(EquitySnapshot.wallet_id == wallet.id).order_by(EquitySnapshot.date)
+    ).scalars().all()
+    return [
+        EquitySnapshotResponse(
+            date=s.date, cash=float(s.cash), positions_value=float(s.positions_value),
+            total_equity=float(s.total_equity),
+            benchmark_equity=float(s.benchmark_equity) if s.benchmark_equity is not None else None,
+        )
+        for s in snapshots
+    ]

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from backend.api.deps import get_db
 from backend.api.main import app
+from backend.db.models import EquitySnapshot, Fill, Position, User
 
 VALID_SPEC = {
     "name": "sma-crossover",
@@ -134,4 +136,79 @@ def test_get_unowned_wallet_returns_404(client):
     ).json()
 
     res = client.get(f"/wallets/{wallet['id']}", headers=headers_b)
+    assert res.status_code == 404
+
+
+def _wallet_id_for(db_session, email: str) -> int:
+    from backend.db.models import Wallet
+
+    user = db_session.execute(select(User).where(User.email == email)).scalar_one()
+    wallet = db_session.execute(select(Wallet).where(Wallet.user_id == user.id)).scalars().first()
+    return wallet.id
+
+
+def test_get_wallet_positions(client, db_session):
+    headers = _auth_headers(client, "wj@example.com")
+    wallet_id = _wallet_id_for(db_session, "wj@example.com")
+    db_session.add(
+        Position(wallet_id=wallet_id, ticker="AAPL", shares=10, avg_entry_price=150.0,
+                 entry_date=date.today(), entry_reason="cross_up")
+    )
+    db_session.flush()
+
+    res = client.get(f"/wallets/{wallet_id}/positions", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["ticker"] == "AAPL"
+    assert body[0]["shares"] == 10
+
+
+def test_get_wallet_fills(client, db_session):
+    headers = _auth_headers(client, "wk@example.com")
+    wallet_id = _wallet_id_for(db_session, "wk@example.com")
+    db_session.add(
+        Fill(wallet_id=wallet_id, timestamp=datetime.now(timezone.utc), ticker="AAPL", action="BUY",
+             shares=10, fill_price=150.5, cost_bps_applied=5.0, reason="cross_up")
+    )
+    db_session.flush()
+
+    res = client.get(f"/wallets/{wallet_id}/fills", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["action"] == "BUY"
+
+
+def test_get_wallet_equity_snapshots(client, db_session):
+    headers = _auth_headers(client, "wl@example.com")
+    wallet_id = _wallet_id_for(db_session, "wl@example.com")
+    db_session.add(
+        EquitySnapshot(wallet_id=wallet_id, date=date.today() - timedelta(days=1),
+                       cash=100_000.0, positions_value=0.0, total_equity=100_000.0, benchmark_equity=100_000.0)
+    )
+    db_session.add(
+        EquitySnapshot(wallet_id=wallet_id, date=date.today(),
+                       cash=90_000.0, positions_value=10_500.0, total_equity=100_500.0, benchmark_equity=100_200.0)
+    )
+    db_session.flush()
+
+    res = client.get(f"/wallets/{wallet_id}/equity-snapshots", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 2
+    assert body[0]["date"] < body[1]["date"]  # ordered ascending, chart-ready
+    assert body[1]["total_equity"] == 100_500.0
+
+
+def test_wallet_sub_resources_scoped_to_owner(client, db_session):
+    _auth_headers(client, "wm@example.com")
+    headers_b = _auth_headers(client, "wn@example.com")
+    wallet_id_a = _wallet_id_for(db_session, "wm@example.com")
+
+    res = client.get(f"/wallets/{wallet_id_a}/positions", headers=headers_b)
+    assert res.status_code == 404
+    res = client.get(f"/wallets/{wallet_id_a}/fills", headers=headers_b)
+    assert res.status_code == 404
+    res = client.get(f"/wallets/{wallet_id_a}/equity-snapshots", headers=headers_b)
     assert res.status_code == 404

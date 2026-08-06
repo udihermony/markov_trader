@@ -40,5 +40,16 @@ services:
       DATABASE_URL: postgresql+psycopg2://swing:swing@postgres:5432/markov_trader
     command: sh -c "alembic upgrade head && python -m backend.worker.main"
 
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      # Browser-side — must be host-reachable, not the compose-internal
+      # `api:8000` hostname.
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+
 volumes:
   pgdata:
