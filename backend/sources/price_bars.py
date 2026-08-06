@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from backend.db.models import Instrument, PriceBar
+from backend.sources.registry import AlignmentPolicy, FeatureSpec, SourceSpec, TrustClass, registry
 
 log = logging.getLogger(__name__)
 
@@ -228,3 +229,40 @@ class PriceBarsSource:
             .all()
         )
         return list(rows)
+
+
+# --------------------------------------------------------------- M2: registry
+PRICE_BARS_SPEC = SourceSpec(
+    id="price_bars",
+    features={
+        "open": FeatureSpec("open", "float"),
+        "high": FeatureSpec("high", "float"),
+        "low": FeatureSpec("low", "float"),
+        "close": FeatureSpec("close", "float"),
+        "volume": FeatureSpec("volume", "int"),
+    },
+    trust_class=TrustClass.POINT_IN_TIME,
+    native_frequency="daily",
+    alignment=AlignmentPolicy(native_frequency="daily"),
+    coverage_note="Adjusted (auto_adjust=True) daily bars via yfinance; coverage depends on "
+                  "ticker history availability.",
+)
+
+
+class PriceBarsFeatureAdapter:
+    """Wraps a `PriceBarsSource` to expose the feature-expression-facing
+    `get_series` interface, without touching `PriceBarsSource` itself —
+    the orchestrator (M1) keeps calling `get_bars`/`get_open`/`get_close`
+    directly and is unaffected by this additive layer."""
+
+    spec = PRICE_BARS_SPEC
+
+    def __init__(self, price_bars: PriceBarsSource):
+        self._price_bars = price_bars
+
+    def get_series(self, feature: str, ticker: str, as_of: date, lookback_days: int) -> pd.Series:
+        return self._price_bars.get_bars(ticker, as_of, lookback_days)[feature]
+
+
+def register_price_bars_source(adapter: PriceBarsFeatureAdapter) -> None:
+    registry.register(adapter)

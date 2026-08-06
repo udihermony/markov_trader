@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.db.models import ScreenResult
+from backend.sources.registry import AlignmentPolicy, SourceSpec, TrustClass, registry
 
 log = logging.getLogger(__name__)
 
@@ -144,3 +145,42 @@ class FinvizScreenSource:
             .order_by(ScreenResult.rank)
         ).scalars().all()
         return list(rows)[: self.cfg.top_n]
+
+
+# --------------------------------------------------------------- M2: registry
+FINVIZ_SCREEN_SPEC = SourceSpec(
+    id="finviz_screen",
+    features={},  # not a feature-expression source (no px/x/pm/news/fund-style namespace in
+                  # DESIGN.md §4.1) — it's a universe-defining source consumed by `universe`
+                  # nodes in M3, not `trigger`/`confirm` expressions. Registered anyway so (a)
+                  # the registry/conformance machinery is proven against a structurally
+                  # different adapter shape (date+ticker+rank screen results, not
+                  # ticker+date-keyed OHLCV), and (b) CLAUDE.md's "sources/ is the only data
+                  # chokepoint" applies to every source, not just expression-bearing ones.
+    trust_class=TrustClass.RECONSTRUCTABLE,  # watchlist replay depends on recorded history,
+                                              # with an explicit look-ahead caveat on the
+                                              # frozen-fallback path — weaker than price_bars.
+    native_frequency="daily",
+    alignment=AlignmentPolicy(native_frequency="daily"),
+    coverage_note="Backtest mode replays recorded screen_results; falls back to a frozen "
+                  "live screen when nothing is recorded on/before as_of (selection bias — "
+                  "see module docstring).",
+)
+
+
+class FinvizScreenAdapter:
+    """Doesn't implement `get_series` (it has no features) — this satisfies
+    a looser structural need for the registry/conformance harness rather
+    than the full `SourceAdapter` Protocol used by expression evaluation."""
+
+    spec = FINVIZ_SCREEN_SPEC
+
+    def __init__(self, screener: FinvizScreenSource):
+        self._screener = screener
+
+    def get_watchlist_as_of(self, as_of: date) -> list[str]:
+        return self._screener.get_watchlist(as_of)
+
+
+def register_finviz_screen_source(adapter: FinvizScreenAdapter) -> None:
+    registry.register(adapter)
