@@ -21,6 +21,7 @@ export interface Strategy {
   spec_version: number
   spec: StrategySpec
   trust_label: TrustLabel
+  parent_id: number | null
   created_at: string
 }
 
@@ -122,4 +123,85 @@ export interface EquitySnapshot {
   positions_value: number
   total_equity: number
   benchmark_equity: number | null
+}
+
+// M7 — Lab
+export interface BacktestMetrics {
+  total_return_pct: number
+  benchmark_return_pct: number | null
+  max_drawdown_pct: number
+  n_trades: number
+  n_closed_trades: number
+  hit_rate: number | null
+  avg_holding_days_calendar: number | null
+}
+
+export interface EquityCurvePoint {
+  date: string
+  total_equity: number
+  benchmark_equity: number | null
+}
+
+export interface BacktestResultJson {
+  metrics: BacktestMetrics
+  equity_curve: EquityCurvePoint[]
+  fills: { date: string; ticker: string; action: 'BUY' | 'SELL'; shares: number; fill_price: number; reason: string }[]
+  scan_param?: string
+  scan_value?: number | string
+}
+
+export interface Experiment {
+  id: number
+  strategy_id: number
+  hypothesis: string
+  expected_outcome: string
+  actual_outcome: string | null
+  prediction_correct: boolean | null
+  period_start: string
+  period_end: string
+  initiated_by: string
+  is_holdout: boolean
+  diff_summary: string | null
+  result_json: BacktestResultJson | null
+  created_at: string
+}
+
+export interface Holdout {
+  id: number
+  start_date: string
+  end_date: string
+  unseals_total: number
+  unseals_used: number
+  created_at: string
+}
+
+export interface NeighbourhoodScanPoint {
+  value: number | string
+  total_return_pct: number
+  experiment_id: number
+}
+
+export interface LuckTestResult {
+  real_return_pct: number
+  shuffled_returns: number[]
+  percentile: number
+}
+
+export interface SearchCounter {
+  count: number
+  best_return_pct: number | null
+}
+
+export interface QuestionAnswer {
+  answer: string
+  detail: string
+}
+
+export interface ReportCard {
+  has_evidence: boolean
+  evidence_source: 'holdout' | 'lab' | null
+  beat_doing_nothing: QuestionAnswer | null
+  real_or_luck: QuestionAnswer | null
+  how_often_right: QuestionAnswer | null
+  could_stomach_it: QuestionAnswer | null
 }

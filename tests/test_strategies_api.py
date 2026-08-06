@@ -167,3 +167,40 @@ def test_update_unowned_strategy_returns_404(client):
 
     res = client.put(f"/strategies/{created['id']}", json={"name": "Hijacked"}, headers=headers_b)
     assert res.status_code == 404
+
+
+def test_parent_id_round_trips_through_duplicate(client):
+    headers = _auth_headers(client, "dup@example.com")
+    original = client.post("/strategies", json={"name": "Original", "spec": VALID_SPEC}, headers=headers).json()
+    assert original["parent_id"] is None
+
+    duplicate = client.post(
+        "/strategies",
+        json={"name": "Original (copy)", "spec": VALID_SPEC, "parent_id": original["id"]},
+        headers=headers,
+    ).json()
+    assert duplicate["parent_id"] == original["id"]
+
+
+def test_duplicate_with_unowned_parent_returns_404(client):
+    headers_a = _auth_headers(client, "dup-a@example.com")
+    headers_b = _auth_headers(client, "dup-b@example.com")
+    original = client.post("/strategies", json={"name": "A's", "spec": VALID_SPEC}, headers=headers_a).json()
+
+    res = client.post(
+        "/strategies",
+        json={"name": "Stolen copy", "spec": VALID_SPEC, "parent_id": original["id"]},
+        headers=headers_b,
+    )
+    assert res.status_code == 404
+
+
+def test_search_counter_and_report_card_start_empty(client):
+    headers = _auth_headers(client, "reportcard@example.com")
+    strategy = client.post("/strategies", json={"name": "SMA", "spec": VALID_SPEC}, headers=headers).json()
+
+    counter = client.get(f"/strategies/{strategy['id']}/search-counter", headers=headers).json()
+    assert counter == {"count": 0, "best_return_pct": None}
+
+    report = client.get(f"/strategies/{strategy['id']}/report-card", headers=headers).json()
+    assert report["has_evidence"] is False

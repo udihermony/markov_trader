@@ -8,11 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_current_user, get_db
-from backend.db.models import Strategy, User
+from backend.db.models import Experiment, Strategy, User
 from backend.engine.graph.compiled import CompiledGraph
 from backend.engine.graph.registry import get_node_type
 from backend.engine.graph.spec import StrategySpec
 from backend.engine.graph.validator import GraphValidationError, validate_spec
+from backend.engine.lab_stats import lineage_experiments, search_counter as _search_counter
 from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
 from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
 from backend.sources.registry import SourceRegistry
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/strategies", tags=["strategies"])
 class CreateStrategyRequest(BaseModel):
     name: str
     spec: dict
+    parent_id: int | None = None  # set by "Duplicate strategy" for Lab lineage (DESIGN.md §6)
 
 
 class UpdateStrategyRequest(BaseModel):
@@ -40,7 +42,27 @@ class StrategyResponse(BaseModel):
     spec_version: int
     spec: dict
     trust_label: str
+    parent_id: int | None
     created_at: datetime
+
+
+class QuestionAnswer(BaseModel):
+    answer: str
+    detail: str
+
+
+class ReportCardResponse(BaseModel):
+    has_evidence: bool
+    evidence_source: str | None = None
+    beat_doing_nothing: QuestionAnswer | None = None
+    real_or_luck: QuestionAnswer | None = None
+    how_often_right: QuestionAnswer | None = None
+    could_stomach_it: QuestionAnswer | None = None
+
+
+class SearchCounterResponse(BaseModel):
+    count: int
+    best_return_pct: float | None
 
 
 class FunnelStageResponse(BaseModel):
@@ -87,7 +109,8 @@ def _to_response(strategy: Strategy, db: Session) -> StrategyResponse:
     graph = _compile_graph(db, StrategySpec.model_validate(strategy.spec_json))
     return StrategyResponse(
         id=strategy.id, name=strategy.name, spec_version=strategy.spec_version,
-        spec=strategy.spec_json, trust_label=graph.trust_label.value, created_at=strategy.created_at,
+        spec=strategy.spec_json, trust_label=graph.trust_label.value, parent_id=strategy.parent_id,
+        created_at=strategy.created_at,
     )
 
 
@@ -98,8 +121,15 @@ def create_strategy(
     db: Session = Depends(get_db),
 ) -> StrategyResponse:
     spec = _validate_or_422(payload.spec)
+    if payload.parent_id is not None:
+        parent = db.execute(
+            select(Strategy).where(Strategy.id == payload.parent_id, Strategy.user_id == user.id)
+        ).scalar_one_or_none()
+        if parent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="parent strategy not found")
     strategy = Strategy(
-        user_id=user.id, name=payload.name, spec_json=payload.spec, spec_version=spec.spec_version
+        user_id=user.id, name=payload.name, spec_json=payload.spec, spec_version=spec.spec_version,
+        parent_id=payload.parent_id,
     )
     db.add(strategy)
     db.commit()
@@ -182,3 +212,88 @@ def update_strategy(
     db.commit()
     db.refresh(strategy)
     return _to_response(strategy, db)
+
+
+def _owned_or_404(strategy_id: int, user: User, db: Session) -> Strategy:
+    strategy = db.execute(
+        select(Strategy).where(Strategy.id == strategy_id, Strategy.user_id == user.id)
+    ).scalar_one_or_none()
+    if strategy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="strategy not found")
+    return strategy
+
+
+@router.get("/{strategy_id}/search-counter", response_model=SearchCounterResponse)
+def get_search_counter(
+    strategy_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> SearchCounterResponse:
+    _owned_or_404(strategy_id, user, db)
+    count, best = _search_counter(db, strategy_id)
+    return SearchCounterResponse(count=count, best_return_pct=best)
+
+
+@router.get("/{strategy_id}/report-card", response_model=ReportCardResponse)
+def get_report_card(
+    strategy_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> ReportCardResponse:
+    """DESIGN.md §3.5's four questions. Prefers a holdout result over any
+    Lab result — the evidence pipeline (§2) ranks holdout evidence above
+    search-contaminated Lab evidence — and is explicit about "no evidence
+    yet" rather than fabricating an answer from nothing."""
+    _owned_or_404(strategy_id, user, db)
+    experiments = [e for e in lineage_experiments(db, strategy_id) if e.user_id == user.id and e.result_json]
+    if not experiments:
+        return ReportCardResponse(has_evidence=False)
+
+    holdout_experiments = [e for e in experiments if e.is_holdout]
+    if holdout_experiments:
+        reference = max(holdout_experiments, key=lambda e: e.created_at)
+        evidence_source = "holdout"
+    else:
+        reference = max(experiments, key=lambda e: e.result_json["metrics"]["total_return_pct"])
+        evidence_source = "lab"
+    m = reference.result_json["metrics"]
+    count, _ = _search_counter(db, strategy_id)
+
+    if m.get("benchmark_return_pct") is not None:
+        beat_doing_nothing = QuestionAnswer(
+            answer="Yes" if m["total_return_pct"] > m["benchmark_return_pct"] else "No",
+            detail=f"{m['total_return_pct']:+.1f}% vs. SPY's {m['benchmark_return_pct']:+.1f}% over the same period.",
+        )
+    else:
+        beat_doing_nothing = QuestionAnswer(
+            answer=f"{m['total_return_pct']:+.1f}%", detail="No benchmark data available for this period.",
+        )
+
+    if evidence_source == "holdout":
+        real_or_luck = QuestionAnswer(
+            answer="This is your one honest look",
+            detail="From your sealed holdout period — the only result in this app that isn't contaminated by search.",
+        )
+    else:
+        real_or_luck = QuestionAnswer(
+            answer="Unproven — Lab only",
+            detail=(
+                f"{count} Lab experiment{'s' if count != 1 else ''} run so far on this idea. "
+                "Lab results are contaminated by search; run a luck test or spend a holdout unseal for a cleaner answer."
+            ),
+        )
+
+    if m.get("hit_rate") is not None:
+        how_often_right = QuestionAnswer(
+            answer=f"{m['hit_rate']:.0f}%",
+            detail=f"{m['n_closed_trades']} of {m['n_trades']} fills were closed round trips.",
+        )
+    else:
+        how_often_right = QuestionAnswer(answer="Not enough trades yet", detail="No closed round trips to grade.")
+
+    could_stomach_it = QuestionAnswer(
+        answer=f"Worst stretch: -{m['max_drawdown_pct']:.1f}%",
+        detail="The largest drop from a peak to a later low in this run's equity curve.",
+    )
+
+    return ReportCardResponse(
+        has_evidence=True, evidence_source=evidence_source,
+        beat_doing_nothing=beat_doing_nothing, real_or_luck=real_or_luck,
+        how_often_right=how_often_right, could_stomach_it=could_stomach_it,
+    )

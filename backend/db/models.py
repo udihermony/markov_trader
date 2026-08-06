@@ -4,11 +4,13 @@ import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     Numeric,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -70,6 +72,9 @@ class Strategy(Base):
     name: Mapped[str] = mapped_column(nullable=False)
     spec_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     spec_version: Mapped[int] = mapped_column(nullable=False, server_default="2")
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -170,3 +175,43 @@ class EquitySnapshot(Base):
     positions_value: Mapped[float] = mapped_column(Numeric, nullable=False)
     total_equity: Mapped[float] = mapped_column(Numeric, nullable=False)
     benchmark_equity: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+
+
+class Holdout(Base):
+    """Sealed once per user (CLAUDE.md rule 7 in spirit — a wallet cannot be
+    backdated, and this is the honest-history counterpart: a period neither
+    user nor AI may test against except by spending a finite unseal)."""
+
+    __tablename__ = "holdouts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, unique=True)
+    start_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    unseals_total: Mapped[int] = mapped_column(nullable=False, server_default="3")
+    unseals_used: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Experiment(Base):
+    __tablename__ = "experiments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id"), nullable=False)
+    hypothesis: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    actual_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prediction_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    period_start: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    initiated_by: Mapped[str] = mapped_column(nullable=False, server_default="user")
+    status: Mapped[str] = mapped_column(nullable=False, server_default="completed")
+    is_holdout: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    spec_snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

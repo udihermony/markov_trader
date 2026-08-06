@@ -11,6 +11,7 @@ import { CreateWalletPage } from './pages/CreateWalletPage'
 import { StrategiesPage } from './pages/StrategiesPage'
 import { PresetPickerPage } from './pages/PresetPickerPage'
 import { StrategyBuilderPage } from './pages/StrategyBuilderPage'
+import { LabPage } from './pages/LabPage'
 
 function protect(children: ReactNode) {
   return (
@@ -33,6 +34,7 @@ function App() {
       <Route path="/strategies/new" element={protect(<PresetPickerPage />)} />
       <Route path="/strategies/new/build" element={protect(<StrategyBuilderPage />)} />
       <Route path="/strategies/:id/edit" element={protect(<StrategyBuilderPage />)} />
+      <Route path="/lab" element={protect(<LabPage />)} />
     </Routes>
   )
 }

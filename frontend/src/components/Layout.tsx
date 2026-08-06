@@ -31,6 +31,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <NavItem to="/">Today</NavItem>
               <NavItem to="/wallets">Wallets</NavItem>
               <NavItem to="/strategies">Strategies</NavItem>
+              <NavItem to="/lab">Lab</NavItem>
             </nav>
           </div>
           <Button variant="ghost" onClick={logout}>

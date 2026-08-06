@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Callable
 
 from rich.console import Console
 from rich.table import Table
@@ -45,6 +46,7 @@ class Orchestrator:
         price_bars: PriceBarsSource,
         sandbox: Sandbox,
         graph: CompiledGraph,
+        entry_randomizer: Callable[[], bool] | None = None,
     ):
         self.session = session
         self.wallet_id = wallet_id
@@ -53,6 +55,11 @@ class Orchestrator:
         self.price_bars = price_bars
         self.sandbox = sandbox
         self.graph = graph
+        # Lab's luck test only (backend/engine/backtest_runner.py): when set,
+        # replaces the trigger's pass/fail with a calibrated coin flip while
+        # leaving universe/exits/sizing/slippage untouched. None for every
+        # other caller (CLI, wallet runner) — zero behavior change.
+        self.entry_randomizer = entry_randomizer
         self.initial_cash = float(
             session.execute(select(Wallet.initial_cash).where(Wallet.id == wallet_id)).scalar_one()
         )
@@ -177,9 +184,17 @@ class Orchestrator:
             bars = self.price_bars.get_bars(ticker, as_of)
             if len(bars) < self.data_cfg.min_history_days:
                 continue
-            result = self.graph.evaluate_entry(ticker, as_of, portfolio)
-            if not result.passed:
-                continue
+            if self.entry_randomizer is not None:
+                if not self.entry_randomizer():
+                    continue
+                result = NodeResult(
+                    passed=True, reason="luck_test_random_entry",
+                    explanation="Random entry (luck test)", missing=[], metadata={},
+                )
+            else:
+                result = self.graph.evaluate_entry(ticker, as_of, portfolio)
+                if not result.passed:
+                    continue
             if slots <= 0:
                 log.info("max_concurrent_positions reached; skipping BUY %s", ticker)
                 continue
@@ -270,6 +285,8 @@ class Orchestrator:
 
     # ---------------------------------------------------------------- summary
     def print_backtest_summary(self) -> None:
+        from backend.engine.backtest_runner import compute_metrics
+
         rows = self.session.execute(
             select(EquitySnapshot)
             .where(EquitySnapshot.wallet_id == self.wallet_id)
@@ -278,48 +295,21 @@ class Orchestrator:
         if not rows:
             console.print("[yellow]No performance history recorded.")
             return
-        final = rows[-1]
-        total_ret = (float(final.total_equity) / self.initial_cash - 1) * 100
-        bench_ret = (
-            (float(final.benchmark_equity) / self.initial_cash - 1) * 100
-            if final.benchmark_equity else None
-        )
-
-        peak, max_dd = 0.0, 0.0
-        for r in rows:
-            peak = max(peak, float(r.total_equity))
-            if peak > 0:
-                max_dd = max(max_dd, (peak - float(r.total_equity)) / peak)
 
         fills = self.session.execute(
             select(Fill).where(Fill.wallet_id == self.wallet_id).order_by(Fill.id)
         ).scalars().all()
-        sells = [f for f in fills if f.action == "SELL"]
-        n_trades = len(fills)
-
-        wins = closed = 0
-        total_hold = 0
-        for s in sells:
-            # FIFO single-position model: last BUY before this SELL, same ticker.
-            b = next(
-                (
-                    f for f in reversed(fills)
-                    if f.action == "BUY" and f.ticker == s.ticker and f.timestamp <= s.timestamp
-                ),
-                None,
-            )
-            if b:
-                closed += 1
-                if float(s.fill_price) > float(b.fill_price):
-                    wins += 1
-                total_hold += (s.timestamp.date() - b.timestamp.date()).days
+        m = compute_metrics(rows, fills, self.initial_cash)
 
         console.rule("[bold]Backtest Summary")
-        console.print(f"Total return:      {total_ret:+.2f}%")
-        if bench_ret is not None:
-            console.print(f"Benchmark (SPY):   {bench_ret:+.2f}%   (excess {total_ret - bench_ret:+.2f}pp)")
-        console.print(f"Max drawdown:      {max_dd * 100:.2f}%")
-        console.print(f"Fills (BUY+SELL):  {n_trades}")
-        if closed:
-            console.print(f"Hit rate:          {wins / closed * 100:.1f}%  ({wins}/{closed})")
-            console.print(f"Avg holding days:  {total_hold / closed:.1f} (calendar)")
+        console.print(f"Total return:      {m.total_return_pct:+.2f}%")
+        if m.benchmark_return_pct is not None:
+            console.print(
+                f"Benchmark (SPY):   {m.benchmark_return_pct:+.2f}%   "
+                f"(excess {m.total_return_pct - m.benchmark_return_pct:+.2f}pp)"
+            )
+        console.print(f"Max drawdown:      {m.max_drawdown_pct:.2f}%")
+        console.print(f"Fills (BUY+SELL):  {m.n_trades}")
+        if m.n_closed_trades:
+            console.print(f"Hit rate:          {m.hit_rate:.1f}%  ({m.n_closed_trades} closed)")
+            console.print(f"Avg holding days:  {m.avg_holding_days_calendar:.1f} (calendar)")

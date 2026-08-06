@@ -1,29 +1,10 @@
+import { EXPRESSION_FUNCTIONS, composeExpression, parseExpression } from '../../lib/expressions'
 import type { ParamField } from '../../types'
 import { Input } from '../ui/Input'
 
 // The generic, schema-driven form: works for every node type today and any
 // future one (M8's copilot, M10's AI nodes, M11's new sources) without a
 // new form component, as long as its fields fit these five field types.
-
-const EXPRESSION_FUNCTIONS = [
-  { value: 'price', label: 'the price itself' },
-  { value: 'sma', label: 'day average' },
-  { value: 'ema', label: 'day exponential average' },
-  { value: 'rsi', label: 'day RSI' },
-  { value: 'pct_change', label: 'day price change' },
-  { value: 'zscore', label: 'day z-score' },
-]
-
-function parseExpression(expr: string | undefined): { fn: string; window: number } {
-  if (!expr || expr.trim() === 'px.close') return { fn: 'price', window: 10 }
-  const match = /^(\w+)\(px\.close,\s*(\d+)\)$/.exec(expr.trim())
-  if (match) return { fn: match[1], window: Number(match[2]) }
-  return { fn: 'price', window: 10 }
-}
-
-function composeExpression(fn: string, window: number): string {
-  return fn === 'price' ? 'px.close' : `${fn}(px.close, ${window})`
-}
 
 interface ParamFormProps {
   schema: ParamField[]
