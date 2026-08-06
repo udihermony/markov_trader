@@ -8,3 +8,9 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# generated run data
+backtests/
+
+# local agent settings
+.claude/
