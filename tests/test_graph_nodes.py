@@ -9,10 +9,12 @@ import pytest
 
 from backend.db.models import Instrument, PriceBar
 from backend.engine.graph.nodes import (
+    AlwaysTriggerNode,
     CrossNode,
     FinvizScreenUniverseNode,
     FixedFractionSizeNode,
     ManualListUniverseNode,
+    NeverExitNode,
     ThresholdNode,
     TimeStopExitNode,
 )
@@ -175,3 +177,18 @@ def test_finviz_screen_universe_node(db_session):
     screener = FinvizScreenSource(db_session, ScreenerConfig(), mode="backtest")
     node = FinvizScreenUniverseNode(FinvizScreenAdapter(screener))
     assert node.filter([], date(2026, 1, 15)) == ["AAPL"]
+
+
+def test_always_trigger_node_fires(db_session):
+    ctx = make_ctx(db_session, "SPY", date(2026, 1, 15))
+    result = AlwaysTriggerNode().evaluate(ctx)
+    assert result.passed
+    assert result.reason == "always"
+
+
+def test_never_exit_node_never_fires(db_session):
+    position = Position("SPY", 10, 500.0, date(2026, 1, 1))
+    ctx = make_ctx(db_session, "SPY", date(2026, 1, 15), position=position)
+    result = NeverExitNode().evaluate(ctx)
+    assert not result.passed
+    assert result.reason == "never"

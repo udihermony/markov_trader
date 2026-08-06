@@ -110,6 +110,15 @@ def cmd_paper(args: argparse.Namespace) -> None:
         orch.run_day(date.today())
 
 
+def cmd_run_wallets(_args: argparse.Namespace) -> None:
+    """Runs every active wallet forward one day — what the scheduler does.
+    Exists so wallets can be demonstrated running in parallel on demand,
+    without waiting for the actual after-close cron trigger."""
+    from backend.worker.wallet_runner import run_all_active_wallets
+
+    run_all_active_wallets()
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
@@ -157,6 +166,9 @@ def main() -> None:
     p_bt.add_argument("--end", required=True, metavar="YYYY-MM-DD")
     add_strategy_flags(p_bt)
     p_bt.set_defaults(func=cmd_backtest)
+
+    p_rw = sub.add_parser("run-wallets", help="run all active wallets forward one day")
+    p_rw.set_defaults(func=cmd_run_wallets)
 
     args = parser.parse_args()
     args.func(args)

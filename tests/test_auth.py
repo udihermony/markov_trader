@@ -50,3 +50,22 @@ def test_login_wrong_password_rejected(client):
 def test_login_unknown_email_rejected(client):
     res = client.post("/auth/login", json={"email": "nobody@example.com", "password": "x"})
     assert res.status_code == 401
+
+
+def test_register_creates_default_benchmark_wallet(client):
+    client.post("/auth/register", json={"email": "bench@example.com", "password": "hunter2pw"})
+    token = client.post(
+        "/auth/login", json={"email": "bench@example.com", "password": "hunter2pw"}
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    wallets = client.get("/wallets", headers=headers).json()
+    assert len(wallets) == 1
+    wallet = wallets[0]
+    assert wallet["is_benchmark"] is True
+    assert wallet["name"] == "SPY Benchmark"
+    assert wallet["strategy_id"] is not None
+
+    strategy = client.get(f"/strategies/{wallet['strategy_id']}", headers=headers)
+    assert strategy.status_code == 200
+    assert strategy.json()["name"] == "SPY Buy & Hold"

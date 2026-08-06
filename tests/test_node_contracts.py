@@ -24,6 +24,8 @@ PARAMS_BY_TYPE = {
     "threshold": {"feature": "px.close", "op": ">", "value": 1.0},
     "time_stop": {"max_hold_days": 5, "calendar_feature": "px.close"},
     "fixed_fraction": {"fraction": 0.1},
+    "always": {},
+    "never": {},
 }
 
 

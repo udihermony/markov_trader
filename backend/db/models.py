@@ -62,13 +62,26 @@ class ScreenResult(Base):
     source: Mapped[str] = mapped_column(nullable=False, server_default="finviz")
 
 
+class Strategy(Base):
+    __tablename__ = "strategies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(nullable=False)
+    spec_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    spec_version: Mapped[int] = mapped_column(nullable=False, server_default="2")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class Wallet(Base):
     __tablename__ = "wallets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(nullable=False)
-    strategy_id: Mapped[int | None] = mapped_column(nullable=True)  # no FK yet — strategies table is M3
+    strategy_id: Mapped[int | None] = mapped_column(ForeignKey("strategies.id"), nullable=True)
     initial_cash: Mapped[float] = mapped_column(Numeric, nullable=False)
     cash: Mapped[float] = mapped_column(Numeric, nullable=False)
     start_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_db
+from backend.api.routers.wallets import create_default_benchmark_wallet
 from backend.api.security import create_access_token, hash_password, verify_password
 from backend.db.models import User
 
@@ -39,6 +40,8 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> Registe
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email already registered")
     user = User(email=payload.email, password_hash=hash_password(payload.password))
     db.add(user)
+    db.flush()  # get user.id without committing yet
+    create_default_benchmark_wallet(db, user)  # DESIGN.md §3: created by default, atomically with the user
     db.commit()
     db.refresh(user)
     return RegisterResponse(id=user.id, email=user.email)

@@ -29,5 +29,16 @@ services:
     ports:
       - "8000:8000"
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://swing:swing@postgres:5432/markov_trader
+    command: sh -c "alembic upgrade head && python -m backend.worker.main"
+
 volumes:
   pgdata:

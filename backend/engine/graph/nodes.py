@@ -166,6 +166,40 @@ def _time_stop_factory(params: dict, registry: SourceRegistry) -> TimeStopExitNo
 register_node_type(NodeTypeInfo("time_stop", frozenset({"exit"}), "standard", _time_stop_factory))
 
 
+# ------------------------------------------------------- buy-and-hold primitives
+@dataclass(frozen=True)
+class AlwaysTriggerNode:
+    """Fires unconditionally. Needed by the default SPY buy-and-hold wallet
+    (M4) — buy-and-hold has no natural trigger condition in the rest of the
+    vocabulary, and this is clearer than faking one with `threshold` against
+    a condition that's always true by construction (e.g. price > 0)."""
+
+    def evaluate(self, ctx: NodeContext) -> NodeResult:
+        return NodeResult(passed=True, reason="always", explanation="Always fires.")
+
+
+@dataclass(frozen=True)
+class NeverExitNode:
+    """Never fires. The buy-and-hold counterpart to `AlwaysTriggerNode` —
+    every graph needs at least one exit node (DESIGN.md §4.5), and a wallet
+    that's meant to never sell needs one that's honest about never firing."""
+
+    def evaluate(self, ctx: NodeContext) -> NodeResult:
+        return NodeResult(passed=False, reason="never", explanation="Never fires.")
+
+
+def _always_factory(params: dict, registry: SourceRegistry) -> AlwaysTriggerNode:
+    return AlwaysTriggerNode()
+
+
+def _never_factory(params: dict, registry: SourceRegistry) -> NeverExitNode:
+    return NeverExitNode()
+
+
+register_node_type(NodeTypeInfo("always", frozenset({"trigger"}), "standard", _always_factory))
+register_node_type(NodeTypeInfo("never", frozenset({"exit"}), "standard", _never_factory))
+
+
 # ---------------------------------------------------------------------- size
 @dataclass(frozen=True)
 class FixedFractionSizeNode:
