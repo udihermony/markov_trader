@@ -81,7 +81,11 @@ def _resolve_conn(mode: str, run_id: Optional[str]) -> sqlite3.Connection:
     return get_connection(_db_path(mode))
 
 
-def _initial_cash() -> float:
+def _initial_cash(run_id: Optional[str] = None) -> float:
+    if run_id:
+        for r in _load_registry():
+            if r["run_id"] == run_id:
+                return float(r.get("sizing", {}).get("initial_cash", 100_000.0))
     return float(yaml.safe_load(CONFIG_PATH.read_text())["sizing"]["initial_cash"])
 
 
@@ -287,7 +291,7 @@ def get_performance(mode: str = "paper", run_id: Optional[str] = None):
 def get_kpis(mode: str = "paper", run_id: Optional[str] = None):
     conn = _resolve_conn(mode, run_id)
     try:
-        return _compute_kpis(conn, _initial_cash())
+        return _compute_kpis(conn, _initial_cash(run_id))
     finally:
         conn.close()
 
@@ -296,7 +300,7 @@ def get_kpis(mode: str = "paper", run_id: Optional[str] = None):
 def get_summary(mode: str = "paper", run_id: Optional[str] = None):
     conn = _resolve_conn(mode, run_id)
     try:
-        return _compute_summary(conn, _initial_cash())
+        return _compute_summary(conn, _initial_cash(run_id))
     finally:
         conn.close()
 
@@ -310,7 +314,7 @@ def get_positions(mode: str = "paper", run_id: Optional[str] = None):
             "       pc.close AS current_price "
             "FROM positions p "
             "LEFT JOIN price_cache pc ON pc.ticker=p.ticker "
-            "  AND pc.date=(SELECT MAX(date) FROM price_cache WHERE ticker=p.ticker)"
+            "  AND pc.date=(SELECT MAX(date) FROM performance_history)"
         ).fetchall()
         out = []
         for r in rows:
@@ -339,7 +343,7 @@ def get_trades(mode: str = "paper", run_id: Optional[str] = None,
     try:
         rows = conn.execute(
             f"SELECT timestamp, ticker, action, shares, fill_price, cost_bps_applied, reason "
-            f"FROM trade_log WHERE action IN ({ph}) ORDER BY timestamp DESC LIMIT ?",
+            f"FROM trade_log WHERE action IN ({ph}) ORDER BY id DESC LIMIT ?",
             (*action_list, limit),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -384,6 +388,9 @@ def list_runs():
 
 @app.delete("/api/runs/{run_id}")
 def delete_run(run_id: str):
+    job = _jobs.get(run_id)
+    if job and job.get("status") == "running":
+        raise HTTPException(409, "Cannot delete a run that is still executing")
     with _registry_lock:
         runs = _load_registry()
         runs = [r for r in runs if r["run_id"] != run_id]
@@ -396,17 +403,31 @@ def delete_run(run_id: str):
 
 # ------------------------------------------------------------------ run execution
 
-def _build_orch_at(db_path: Path, mode: str = "backtest"):
-    cfg    = load_config(mode)
-    conn   = get_connection(db_path)
-    run_id = str(uuid.uuid4())
+def _build_orch_at(db_path: Path, job_id: str, mode: str = "backtest",
+                   strategy_params: Optional[Dict] = None,
+                   sizing: Optional[Dict] = None,
+                   costs: Optional[Dict] = None):
+    cfg = load_config(mode)
+    if strategy_params:
+        for k, v in strategy_params.items():
+            if k in cfg.strategy.params:
+                cfg.strategy.params[k] = type(cfg.strategy.params[k])(v)
+    if sizing:
+        for k, v in sizing.items():
+            if hasattr(cfg.sizing, k):
+                setattr(cfg.sizing, k, type(getattr(cfg.sizing, k))(v))
+    if costs:
+        for k, v in costs.items():
+            if hasattr(cfg.costs, k):
+                setattr(cfg.costs, k, type(getattr(cfg.costs, k))(v))
+    conn = get_connection(db_path)
     return cfg, Orchestrator(
         cfg,
         DataProvider(conn, cfg.data),
-        Screener(conn, cfg.screener, run_id, mode),
-        Sandbox(conn, run_id, mode, cfg.sizing, cfg.costs),
+        Screener(conn, cfg.screener, job_id, mode),
+        Sandbox(conn, job_id, mode, cfg.sizing, cfg.costs),
         build_strategy(cfg.strategy.name, cfg.strategy.params),
-        run_id,
+        job_id,
     )
 
 
@@ -437,13 +458,17 @@ def _launch(target, *args) -> str:
         finally:
             _run_lock.release()
 
-    threading.Thread(target=run, daemon=True).start()
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:
+        _run_lock.release()
+        raise
     return job_id
 
 
 def _paper_job(job_id: str) -> None:
     try:
-        cfg, orch = _build_orch_at(_db_path("paper"), "paper")
+        cfg, orch = _build_orch_at(_db_path("paper"), job_id, "paper")
         orch.run_day(date.today(), quiet=True)
         conn   = get_connection(_db_path("paper"))
         result = _compute_summary(conn, _initial_cash())
@@ -453,10 +478,23 @@ def _paper_job(job_id: str) -> None:
         _jobs[job_id] = {"status": "error", "error": str(exc)}
 
 
-def _backtest_job(job_id: str, start: str, end: str) -> None:
+def _backtest_job(job_id: str, start: str, end: str,
+                  override_strategy_params: Optional[Dict] = None,
+                  override_sizing: Optional[Dict] = None,
+                  override_costs: Optional[Dict] = None) -> None:
     try:
-        run_db     = _setup_run_db(job_id)
-        cfg, orch  = _build_orch_at(run_db, "backtest")
+        # Snapshot effective params now, before any concurrent config.yaml changes
+        raw = yaml.safe_load(CONFIG_PATH.read_text())
+        eff_strategy = {
+            "name":   raw["strategy"]["name"],
+            "params": {**raw["strategy"]["params"], **(override_strategy_params or {})},
+        }
+        eff_sizing = {**raw["sizing"],  **(override_sizing or {})}
+        eff_costs  = {**raw["costs"],   **(override_costs  or {})}
+
+        run_db    = _setup_run_db(job_id)
+        cfg, orch = _build_orch_at(run_db, job_id, "backtest",
+                                   override_strategy_params, override_sizing, override_costs)
         start_d, end_d = date.fromisoformat(start), date.fromisoformat(end)
         orch.provider.refresh([cfg.data.benchmark_ticker], end_d)
         orch.provider._refresh_one(  # noqa: SLF001
@@ -473,18 +511,17 @@ def _backtest_job(job_id: str, start: str, end: str) -> None:
             orch.run_day(day, quiet=True)
 
         conn   = get_connection(run_db)
-        result = _compute_summary(conn, _initial_cash())
+        result = _compute_summary(conn, float(eff_sizing["initial_cash"]))
         conn.close()
 
-        raw = yaml.safe_load(CONFIG_PATH.read_text())
         _register_run({
             "run_id":     job_id,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "start_date": start,
             "end_date":   end,
-            "strategy":   raw["strategy"],
-            "sizing":     raw["sizing"],
-            "costs":      raw["costs"],
+            "strategy":   eff_strategy,
+            "sizing":     eff_sizing,
+            "costs":      eff_costs,
             "db_file":    f"{job_id}.db",
             **{k: result[k] for k in (
                 "roi_pct", "vs_spy_pct", "spy_roi_pct", "max_drawdown_pct",
@@ -504,11 +541,15 @@ def run_paper():
 class BacktestParams(BaseModel):
     start: str
     end: str
+    strategy_params: Optional[Dict] = None
+    sizing: Optional[Dict] = None
+    costs: Optional[Dict] = None
 
 
 @app.post("/api/backtest")
 def run_backtest(params: BacktestParams):
-    return {"job_id": _launch(_backtest_job, params.start, params.end)}
+    return {"job_id": _launch(_backtest_job, params.start, params.end,
+                              params.strategy_params, params.sizing, params.costs)}
 
 
 @app.get("/api/jobs/{job_id}")

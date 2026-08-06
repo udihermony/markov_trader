@@ -39,13 +39,13 @@ class Screener:
 
     # ---------------------------------------------------------------- backtest
     def _backtest_watchlist(self, as_of: date) -> list[str]:
-        recorded = self._load_recorded(as_of)
+        recorded = self._load_recorded_asof(as_of)
         if recorded:
             return recorded
         if self._frozen is None:
             log.warning(
-                "No recorded screen for %s — freezing today's Finviz watchlist for the "
-                "whole backtest. This introduces selection/look-ahead bias; results are "
+                "No recorded screen on or before %s — freezing today's Finviz watchlist for "
+                "the whole backtest. This introduces selection/look-ahead bias; results are "
                 "indicative only.", as_of,
             )
             try:
@@ -95,10 +95,17 @@ class Screener:
         )
         self.conn.commit()
 
-    def _load_recorded(self, as_of: date) -> list[str]:
+    def _load_recorded_asof(self, as_of: date) -> list[str]:
+        """Most recent watchlist on or before as_of — correct for weekly-cadence screens."""
+        row = self.conn.execute(
+            "SELECT MAX(screen_date) AS d FROM watchlist_history WHERE screen_date <= ?",
+            (as_of.isoformat(),),
+        ).fetchone()
+        if not row or not row["d"]:
+            return []
         rows = self.conn.execute(
             "SELECT ticker FROM watchlist_history WHERE screen_date = ? ORDER BY rank",
-            (as_of.isoformat(),),
+            (row["d"],),
         ).fetchall()
         return [r["ticker"] for r in rows][: self.cfg.top_n]
 

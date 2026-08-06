@@ -733,18 +733,13 @@ async function runBacktest() {
   const start = $('bt-start').value, end = $('bt-end').value;
   if (!start || !end || start >= end) { showBanner('bt-banner', 'Set a valid start and end date.', 'error'); return; }
 
-  // apply selected saved strategy to config before launching
   const sel = $('bt-strategy');
   const stratId = sel.value;
+  let overrides = {};
   if (stratId) {
     const strategies = await api('/api/strategies');
     const strat = strategies.find(s => s.id === stratId);
-    if (strat) {
-      await api('/api/config', {
-        method: 'PATCH',
-        body: JSON.stringify({ strategy_params: strat.strategy_params, sizing: strat.sizing, costs: strat.costs }),
-      });
-    }
+    if (strat) overrides = { strategy_params: strat.strategy_params, sizing: strat.sizing, costs: strat.costs };
   }
 
   $('btn-run-bt').disabled = true;
@@ -754,7 +749,7 @@ async function runBacktest() {
   const stratLabel = stratId ? sel.options[sel.selectedIndex].text : 'current config';
   showBanner('bt-banner', `Starting backtest with "${stratLabel}"…`, 'info');
   try {
-    const { job_id } = await api('/api/backtest', { method: 'POST', body: JSON.stringify({ start, end }) });
+    const { job_id } = await api('/api/backtest', { method: 'POST', body: JSON.stringify({ start, end, ...overrides }) });
     _pollJob(job_id, 'bt-progress', 'bt-bar', 'bt-progress-label',
              'btn-run-bt', 'bt-banner', 'bt-result',
              job => { loadRuns(); });
