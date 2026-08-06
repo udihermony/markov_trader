@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+*.egg-info/
 
 # generated run data
 backtests/
