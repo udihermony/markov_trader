@@ -26,9 +26,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.db.models import EquitySnapshot, Fill, Order, Wallet
+from backend.engine.graph.compiled import CompiledGraph
+from backend.engine.graph.types import NodeResult, PortfolioView
 from backend.engine.sandbox import Sandbox, SizingConfig
-from backend.engine.strategy import Action, Signal, Strategy
-from backend.sources.finviz_screen import FinvizScreenSource
 from backend.sources.price_bars import DataConfig, PriceBarsSource
 
 log = logging.getLogger(__name__)
@@ -43,27 +43,30 @@ class Orchestrator:
         data_cfg: DataConfig,
         sizing: SizingConfig,
         price_bars: PriceBarsSource,
-        screener: FinvizScreenSource,
         sandbox: Sandbox,
-        strategy: Strategy,
+        graph: CompiledGraph,
     ):
         self.session = session
         self.wallet_id = wallet_id
         self.data_cfg = data_cfg
         self.sizing = sizing
         self.price_bars = price_bars
-        self.screener = screener
         self.sandbox = sandbox
-        self.strategy = strategy
+        self.graph = graph
         self.initial_cash = float(
             session.execute(select(Wallet.initial_cash).where(Wallet.id == wallet_id)).scalar_one()
+        )
+
+    def _portfolio_view(self) -> PortfolioView:
+        return PortfolioView(
+            cash=self.sandbox.cash, open_position_count=len(self.sandbox.get_open_positions())
         )
 
     # ------------------------------------------------------------------ daily
     def run_day(self, as_of: date, quiet: bool = False) -> None:
         # We need bars for as_of before executing pending orders (they fill
         # at as_of's open).
-        watchlist = self.screener.get_watchlist(as_of)
+        watchlist = self.graph.candidates(as_of)
         open_tickers = [p.ticker for p in self.sandbox.get_open_positions()]
         pending_tickers = list(
             self.session.execute(
@@ -120,7 +123,7 @@ class Orchestrator:
         self.session.commit()
 
     def _queue_order(
-        self, as_of: date, ticker: str, action: Action, signal: Signal,
+        self, as_of: date, ticker: str, action: str, result: NodeResult,
         cash_amount: float | None = None,
     ) -> bool:
         dup = self.session.execute(
@@ -129,7 +132,7 @@ class Orchestrator:
                 Order.status == "pending",
                 Order.created_date == as_of,
                 Order.ticker == ticker,
-                Order.action == action.value,
+                Order.action == action,
             )
         ).scalar_one_or_none()
         if dup is not None:
@@ -137,8 +140,8 @@ class Orchestrator:
         self.session.add(
             Order(
                 wallet_id=self.wallet_id, created_date=as_of, ticker=ticker,
-                action=action.value, cash_amount=cash_amount, reason=signal.reason,
-                metadata_json=signal.metadata, status="pending",
+                action=action, cash_amount=cash_amount, reason=result.reason,
+                metadata_json=result.metadata, status="pending",
             )
         )
         self.session.commit()
@@ -147,12 +150,10 @@ class Orchestrator:
     # ---------------------------------------------------------------- signals
     def _evaluate_exits(self, as_of: date) -> int:
         queued = 0
+        portfolio = self._portfolio_view()
         for pos in self.sandbox.get_open_positions():
-            bars = self.price_bars.get_bars(pos.ticker, as_of)
-            if bars.empty:
-                continue
-            sig = self.strategy.generate_signal(bars, pos, as_of)
-            if sig.action is Action.SELL and self._queue_order(as_of, pos.ticker, Action.SELL, sig):
+            result = self.graph.evaluate_exit(pos.ticker, pos, as_of, portfolio)
+            if result is not None and self._queue_order(as_of, pos.ticker, "SELL", result):
                 queued += 1
         return queued
 
@@ -169,20 +170,21 @@ class Orchestrator:
         )
         # Cap counts positions net of queued exits plus already-queued buys.
         slots = self.sizing.max_concurrent_positions - (len(open_positions) - queued_exits) - len(pending_buys)
+        portfolio = self._portfolio_view()
         for ticker in watchlist:
             if ticker in open_positions or ticker in pending_buys:
                 continue
             bars = self.price_bars.get_bars(ticker, as_of)
             if len(bars) < self.data_cfg.min_history_days:
                 continue
-            sig = self.strategy.generate_signal(bars, None, as_of)
-            if sig.action is not Action.BUY:
+            result = self.graph.evaluate_entry(ticker, as_of, portfolio)
+            if not result.passed:
                 continue
             if slots <= 0:
                 log.info("max_concurrent_positions reached; skipping BUY %s", ticker)
                 continue
-            cash_amount = self.sandbox.cash * self.sizing.cash_fraction
-            if self._queue_order(as_of, ticker, Action.BUY, sig, cash_amount):
+            cash_amount = self.graph.size(ticker, as_of, portfolio)
+            if self._queue_order(as_of, ticker, "BUY", result, cash_amount):
                 slots -= 1
 
     # ------------------------------------------------------------------ marks

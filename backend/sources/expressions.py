@@ -113,6 +113,31 @@ class FeatureExpr:
         assert self.window is not None
         return self.window + _WARMUP_OFFSET.get(self.func, 0)
 
+    def evaluate_series(
+        self,
+        registry: SourceRegistry,
+        source_aliases: dict[str, str],
+        ticker: str,
+        as_of: date,
+        lookback_days: int | None = None,
+    ) -> pd.Series:
+        """The full computed series (raw feature, or the function applied
+        over it) up through `as_of`. `evaluate()` is `.iloc[-1]` of this;
+        node types that need consecutive values (e.g. the `cross` node's
+        `f_prev`/`f_now`) use `.iloc[-2]`/`.iloc[-1]` directly."""
+        source_id = source_aliases[self.alias]
+        _, adapter = registry.get(source_id)
+        n = self.window or 0
+        calendar_lookback = lookback_days if lookback_days is not None else max(n * 3 + 30, 30)
+
+        if self.kind == "raw":
+            return adapter.get_series(self.feature, ticker, as_of, calendar_lookback)  # type: ignore[attr-defined]
+
+        if self.func == "atr":
+            return _atr_series(adapter, ticker, as_of, calendar_lookback, n)
+        series = adapter.get_series(self.feature, ticker, as_of, calendar_lookback)  # type: ignore[attr-defined]
+        return FUNCTIONS[self.func](series, n)
+
     def evaluate(
         self,
         registry: SourceRegistry,
@@ -121,21 +146,8 @@ class FeatureExpr:
         as_of: date,
         lookback_days: int | None = None,
     ) -> float:
-        source_id = source_aliases[self.alias]
-        _, adapter = registry.get(source_id)
-        n = self.window or 0
-        calendar_lookback = lookback_days if lookback_days is not None else max(n * 3 + 30, 30)
-
-        if self.kind == "raw":
-            series = adapter.get_series(self.feature, ticker, as_of, calendar_lookback)  # type: ignore[attr-defined]
-            return float(series.iloc[-1]) if len(series) else float("nan")
-
-        if self.func == "atr":
-            result = _atr_series(adapter, ticker, as_of, calendar_lookback, n)
-        else:
-            series = adapter.get_series(self.feature, ticker, as_of, calendar_lookback)  # type: ignore[attr-defined]
-            result = FUNCTIONS[self.func](series, n)
-        return float(result.iloc[-1]) if len(result) else float("nan")
+        series = self.evaluate_series(registry, source_aliases, ticker, as_of, lookback_days)
+        return float(series.iloc[-1]) if len(series) else float("nan")
 
 
 def parse_feature_expression(expr: str) -> FeatureExpr:

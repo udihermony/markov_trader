@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.db.models import EquitySnapshot, Fill, Position as PositionRow, SkippedSignal
-from backend.engine.strategy import Position
+from backend.engine.graph.types import Position
 
 
 @dataclass(frozen=True)

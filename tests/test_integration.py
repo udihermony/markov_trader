@@ -10,11 +10,14 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 
 from backend.db.models import EquitySnapshot, Fill, Instrument, Order, PriceBar, ScreenResult
+import backend.engine.graph.nodes  # noqa: F401  registers the node type library
+from backend.engine.graph.compiled import CompiledGraph
+from backend.engine.graph.spec import NodeSpec, SourceRef, StrategySpec
 from backend.engine.orchestrator import Orchestrator
 from backend.engine.sandbox import CostsConfig, Sandbox, SizingConfig
-from backend.engine.strategy import build_strategy
-from backend.sources.finviz_screen import FinvizScreenSource, ScreenerConfig
-from backend.sources.price_bars import DataConfig, PriceBarsSource
+from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
+from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
+from backend.sources.registry import SourceRegistry
 
 
 def weekdays(start: date, n: int) -> list[date]:
@@ -51,6 +54,11 @@ def seed_watchlist(session, ticker: str, days: list[date]) -> None:
 
 
 def build_system(session, wallet_row) -> Orchestrator:
+    """Builds the same SMA-crossover-as-graph shape backend.engine.cli.build()
+    uses (fast=10/slow=20/max_hold_days=5) — the concrete byte-identical
+    regression test DESIGN.md describes: this is the POC's SMA strategy,
+    re-expressed as a node graph, exercising the exact same orchestrator
+    sequencing as before."""
     data_cfg = DataConfig()
     sizing = SizingConfig()
     costs = CostsConfig()
@@ -58,8 +66,28 @@ def build_system(session, wallet_row) -> Orchestrator:
     price_bars.refresh = lambda tickers, as_of: None  # offline: cache is pre-seeded
     screener = FinvizScreenSource(session, ScreenerConfig(), mode="backtest")
     sandbox = Sandbox(session, wallet_row.id, sizing, costs)
-    strategy = build_strategy("sma_crossover", {"fast": 10, "slow": 20, "max_hold_days": 5})
-    return Orchestrator(session, wallet_row.id, data_cfg, sizing, price_bars, screener, sandbox, strategy)
+
+    source_registry = SourceRegistry()
+    source_registry.register(PriceBarsFeatureAdapter(price_bars))
+    source_registry.register(FinvizScreenAdapter(screener))
+
+    spec = StrategySpec(
+        name="sma-crossover-test",
+        sources=[SourceRef(id="px", type="price_bars")],
+        nodes=[
+            NodeSpec(id="u1", kind="universe", type="finviz_screen", params={}),
+            NodeSpec(id="t1", kind="trigger", type="cross",
+                     params={"a": "sma(px.close, 10)", "b": "sma(px.close, 20)", "direction": "up"}),
+            NodeSpec(id="x1", kind="exit", type="cross",
+                     params={"a": "sma(px.close, 10)", "b": "sma(px.close, 20)", "direction": "down"}),
+            NodeSpec(id="x2", kind="exit", type="time_stop",
+                     params={"max_hold_days": 5, "calendar_feature": "px.close"}),
+            NodeSpec(id="s1", kind="size", type="fixed_fraction", params={"fraction": 0.10}),
+        ],
+        edges=[["u1", "t1"]],
+    )
+    graph = CompiledGraph(spec, source_registry)
+    return Orchestrator(session, wallet_row.id, data_cfg, sizing, price_bars, sandbox, graph)
 
 
 def test_backtest_end_to_end(db_session, wallet):

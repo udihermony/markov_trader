@@ -21,11 +21,14 @@ from sqlalchemy.orm import Session
 
 from backend.db.models import User, Wallet
 from backend.db.session import get_session
+import backend.engine.graph.nodes  # noqa: F401  registers the node type library
+from backend.engine.graph.compiled import CompiledGraph
+from backend.engine.graph.spec import NodeSpec, SourceRef, StrategySpec
 from backend.engine.orchestrator import Orchestrator
 from backend.engine.sandbox import CostsConfig, Sandbox, SizingConfig
-from backend.engine.strategy import build_strategy
-from backend.sources.finviz_screen import FinvizScreenSource, ScreenerConfig
-from backend.sources.price_bars import DataConfig, PriceBarsSource
+from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
+from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
+from backend.sources.registry import SourceRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -72,11 +75,33 @@ def build(session: Session, mode: str, args: argparse.Namespace) -> Orchestrator
     price_bars = PriceBarsSource(session, data_cfg)
     screener = FinvizScreenSource(session, screener_cfg, mode)
     sandbox = Sandbox(session, wallet.id, sizing, costs)
-    strategy = build_strategy(
-        "sma_crossover",
-        {"fast": args.fast, "slow": args.slow, "max_hold_days": args.max_hold_days},
+
+    # One fresh registry per CLI invocation — no global registration
+    # pollution across runs, matching M2's per-test pattern.
+    source_registry = SourceRegistry()
+    source_registry.register(PriceBarsFeatureAdapter(price_bars))
+    source_registry.register(FinvizScreenAdapter(screener))
+
+    fast_expr = f"sma(px.close, {args.fast})"
+    slow_expr = f"sma(px.close, {args.slow})"
+    spec = StrategySpec(
+        name="sma-crossover-cli",
+        sources=[SourceRef(id="px", type="price_bars")],
+        nodes=[
+            NodeSpec(id="u1", kind="universe", type="finviz_screen", params={}),
+            NodeSpec(id="t1", kind="trigger", type="cross",
+                     params={"a": fast_expr, "b": slow_expr, "direction": "up"}),
+            NodeSpec(id="x1", kind="exit", type="cross",
+                     params={"a": fast_expr, "b": slow_expr, "direction": "down"}),
+            NodeSpec(id="x2", kind="exit", type="time_stop",
+                     params={"max_hold_days": args.max_hold_days, "calendar_feature": "px.close"}),
+            NodeSpec(id="s1", kind="size", type="fixed_fraction", params={"fraction": args.cash_fraction}),
+        ],
+        edges=[["u1", "t1"]],
     )
-    return Orchestrator(session, wallet.id, data_cfg, sizing, price_bars, screener, sandbox, strategy)
+    graph = CompiledGraph(spec, source_registry)
+
+    return Orchestrator(session, wallet.id, data_cfg, sizing, price_bars, sandbox, graph)
 
 
 def cmd_paper(args: argparse.Namespace) -> None:
