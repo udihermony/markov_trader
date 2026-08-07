@@ -13,12 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import backend.engine.graph.nodes  # noqa: F401  registers the node type library
-from backend.db.models import Strategy, Wallet
+from backend.ai.provider import DEFAULT_MODEL, NoApiKeyError, get_provider_for_user
+from backend.db.models import Strategy, User, Wallet
 from backend.db.session import get_session
 from backend.engine.graph.compiled import CompiledGraph
 from backend.engine.graph.spec import StrategySpec
 from backend.engine.orchestrator import Orchestrator
 from backend.engine.sandbox import CostsConfig, Sandbox, SizingConfig
+from backend.sources.ai_judgment import LiveAIJudgmentAdapter
 from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
 from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
 from backend.sources.registry import SourceRegistry
@@ -57,6 +59,16 @@ def run_wallet_day(session: Session, wallet: Wallet, as_of: date | None = None) 
     registry = SourceRegistry()
     registry.register(PriceBarsFeatureAdapter(price_bars))
     registry.register(FinvizScreenAdapter(screener))
+    # The only registry-building call site that ever registers a *live*
+    # ai_judgment adapter — every other one (Lab, CLI, strategy validation)
+    # registers the disabled no-op instead (DESIGN.md §5.2). A missing API
+    # key is not fatal here: the adapter reports it as a missing judgment,
+    # which the node's own on_missing policy then decides how to handle.
+    try:
+        provider = get_provider_for_user(session, session.get(User, wallet.user_id))
+    except NoApiKeyError:
+        provider = None
+    registry.register(LiveAIJudgmentAdapter(session, wallet, provider, model=DEFAULT_MODEL))
     graph = CompiledGraph(spec, registry)
 
     orch = Orchestrator(session, wallet.id, data_cfg, sizing, price_bars, sandbox, graph)

@@ -11,6 +11,7 @@ import { NodeCard } from '../components/builder/NodeCard'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
+import { useNodeTypes } from '../lib/nodeTypes'
 
 const KIND_SECTIONS: { kind: NodeKind; question: string }[] = [
   { kind: 'universe', question: 'What do I watch?' },
@@ -21,9 +22,14 @@ const KIND_SECTIONS: { kind: NodeKind; question: string }[] = [
   { kind: 'size', question: 'How much?' },
 ]
 
-// M6's builder only ever writes this one source — price_bars is still the
-// only source with real data (see the plan's expression-field scope note).
-const FIXED_SOURCES: SourceRef[] = [{ id: 'px', type: 'price_bars' }]
+// M6's builder always writes price_bars — it's still the only source with
+// real data (see the plan's expression-field scope note). M10 adds
+// ai_judgment automatically whenever the spec has an AI-maturity node —
+// CompiledGraph.trust_label only inspects declared `sources`, so this is
+// what makes an AI-veto strategy actually get labelled "Forward-only"
+// (the backend validator rejects a spec that omits it).
+const PRICE_BARS_SOURCE: SourceRef = { id: 'px', type: 'price_bars' }
+const AI_JUDGMENT_SOURCE: SourceRef = { id: 'ai', type: 'ai_judgment' }
 
 export function StrategyBuilderPage() {
   const { id } = useParams<{ id?: string }>()
@@ -43,6 +49,13 @@ export function StrategyBuilderPage() {
   const [name, setName] = useState(initialPresetSpec?.name ?? 'New Strategy')
   const [nodes, setNodes] = useState<NodeSpec[]>(initialPresetSpec?.nodes ?? [])
 
+  const { data: nodeTypes } = useNodeTypes()
+  const maturityByType = useMemo(() => {
+    const map = new Map<string, string>()
+    nodeTypes?.forEach((t) => map.set(t.type, t.maturity))
+    return map
+  }, [nodeTypes])
+
   useEffect(() => {
     // Skip the fetched-strategy overwrite when a proposal seeded this page
     // (e.g. the copilot's "Review in builder" link) — otherwise the
@@ -54,9 +67,14 @@ export function StrategyBuilderPage() {
     }
   }, [existingStrategy, initialPresetSpec])
 
+  const hasAiNode = nodes.some((n) => maturityByType.get(n.type) === 'AI')
+  const sources = useMemo(
+    () => (hasAiNode ? [PRICE_BARS_SOURCE, AI_JUDGMENT_SOURCE] : [PRICE_BARS_SOURCE]),
+    [hasAiNode],
+  )
   const spec: StrategySpec = useMemo(
-    () => ({ spec_version: 2, name, sources: FIXED_SOURCES, nodes, edges: buildEdges(nodes) }),
-    [name, nodes],
+    () => ({ spec_version: 2, name, sources, nodes, edges: buildEdges(nodes) }),
+    [name, sources, nodes],
   )
   const complexity = useMemo(() => computeComplexity(spec), [spec])
 
@@ -149,6 +167,7 @@ export function StrategyBuilderPage() {
                   <NodeCard
                     key={node.id}
                     node={node}
+                    isAi={maturityByType.get(node.type) === 'AI'}
                     description={stage?.description ?? preview?.descriptions[node.id]}
                     candidatesBefore={stage?.candidates_before}
                     candidatesAfter={stage?.candidates_after}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { NodeKind, NodeSpec, NodeTypeInfo, ParamField } from '../../types'
 import { useNodeTypes } from '../../lib/nodeTypes'
+import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { ParamForm } from './ParamForm'
@@ -75,10 +76,11 @@ export function AddNodeModal({ kind, onAdd, onClose }: AddNodeModalProps) {
               {available.map((info) => (
                 <button
                   key={info.type}
-                  className="w-full text-left px-3 py-2 rounded-md border border-slate-200 hover:border-slate-400 hover:bg-slate-50 text-sm"
+                  className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-md border border-slate-200 hover:border-slate-400 hover:bg-slate-50 text-sm"
                   onClick={() => selectType(info)}
                 >
-                  {info.type}
+                  <span>{info.type}</span>
+                  {info.maturity === 'AI' && <Badge tone="amber">AI</Badge>}
                 </button>
               ))}
               {available.length === 0 && (

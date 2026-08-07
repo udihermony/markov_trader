@@ -70,6 +70,31 @@ def test_run_ephemeral_backtest_produces_a_fill_and_metrics(db_session, monkeypa
     assert result.metrics.total_return_pct <= 0
 
 
+def test_run_ephemeral_backtest_disables_ai_veto_nodes(db_session, monkeypatch):
+    # backend/engine/backtest_runner.py never imports an LLM provider at
+    # all — this is the behavioral proof that an AI veto node neither
+    # blocks the trade nor needs a real Anthropic call to run in Lab.
+    monkeypatch.setattr(PriceBarsSource, "_refresh_one", lambda self, ticker, start, end: None)
+    start, end = date(2026, 2, 2), date(2026, 3, 6)
+    _seed_bars(db_session, "TICK", start - timedelta(days=120), end)
+    _seed_bars(db_session, "SPY", start - timedelta(days=120), end)
+
+    ai_gated = {
+        **ALWAYS_BUY_SPEC,
+        "sources": [*ALWAYS_BUY_SPEC["sources"], {"id": "ai", "type": "ai_judgment"}],
+        "nodes": [
+            *ALWAYS_BUY_SPEC["nodes"],
+            {"id": "v1", "kind": "veto", "type": "ai_regime_check", "params": {}},
+        ],
+        "edges": [*ALWAYS_BUY_SPEC["edges"], ["t1", "v1"]],
+    }
+    spec = StrategySpec.model_validate(ai_gated)
+    result = run_ephemeral_backtest(spec, start, end, connection=db_session.connection())
+
+    assert result.metrics.n_trades == 1  # the disabled AI veto always passes, same as no veto at all
+    assert result.fills[0]["ticker"] == "TICK"
+
+
 def test_run_ephemeral_backtest_leaves_no_rows_behind(db_session, monkeypatch):
     monkeypatch.setattr(PriceBarsSource, "_refresh_one", lambda self, ticker, start, end: None)
     start, end = date(2026, 2, 2), date(2026, 3, 6)

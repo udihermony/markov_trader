@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { Strategy } from '../types'
+import { Card } from '../components/ui/Card'
 import { ExperimentForm } from '../components/lab/ExperimentForm'
 import { ExperimentList } from '../components/lab/ExperimentList'
 import { HoldoutPanel } from '../components/lab/HoldoutPanel'
@@ -54,6 +55,15 @@ export function LabPage() {
 
       {selected && (
         <>
+          {selected.trust_label === 'live_only' && (
+            <Card className="border-amber-200 bg-amber-50">
+              <p className="text-sm text-amber-800">
+                This strategy has an AI check in it. AI checks are switched off for Lab experiments — every
+                result below reflects the strategy without its AI judgment (an LLM asked about a past date
+                could just remember what happened, so it can never be honestly backtested).
+              </p>
+            </Card>
+          )}
           <SearchCounterBanner strategyId={selected.id} luckNullSamples={luckNullSamples} />
           <ExperimentForm strategyId={selected.id} />
           <UnattendedSession strategyId={selected.id} />

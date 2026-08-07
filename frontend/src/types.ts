@@ -13,6 +13,7 @@ export interface Wallet {
   is_benchmark: boolean
   created_at: string
   retired_at: string | null
+  ai_daily_budget_usd: number | null
 }
 
 export interface Strategy {

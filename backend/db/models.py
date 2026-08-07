@@ -99,6 +99,7 @@ class Wallet(Base):
     retired_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    ai_daily_budget_usd: Mapped[float | None] = mapped_column(Numeric, nullable=True)
 
 
 class Position(Base):
@@ -285,3 +286,26 @@ class Job(Base):
     )
     started_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AiJudgment(Base):
+    """One row per live AI veto-node evaluation (DESIGN.md §6 / §5.2 point
+    2: "record, don't replay"). Only `LiveAIJudgmentAdapter` (a real
+    wallet's daily run) ever writes here — `DisabledAIJudgmentAdapter`
+    (Lab/backtests/CLI) never does, so this table doubles as proof that no
+    backtest secretly spent money or called an LLM."""
+
+    __tablename__ = "ai_judgments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"), nullable=False)
+    as_of: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    node_type: Mapped[str] = mapped_column(nullable=False)
+    ticker: Mapped[str] = mapped_column(nullable=False)
+    input_context_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    output_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    model: Mapped[str] = mapped_column(nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Numeric, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

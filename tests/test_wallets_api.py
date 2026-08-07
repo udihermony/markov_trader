@@ -59,6 +59,25 @@ def test_create_wallet_defaults_start_date_to_today(client):
     assert body["is_benchmark"] is False
 
 
+def test_create_wallet_with_ai_daily_budget(client):
+    headers = _auth_headers(client)
+    strategy_id = _create_strategy(client, headers)
+    res = client.post(
+        "/wallets",
+        json={"name": "Budgeted Wallet", "strategy_id": strategy_id, "ai_daily_budget_usd": 2.5},
+        headers=headers,
+    )
+    assert res.status_code == 201
+    assert res.json()["ai_daily_budget_usd"] == 2.5
+
+
+def test_create_wallet_defaults_ai_daily_budget_to_none(client):
+    headers = _auth_headers(client)
+    strategy_id = _create_strategy(client, headers)
+    res = client.post("/wallets", json={"name": "Plain Wallet", "strategy_id": strategy_id}, headers=headers)
+    assert res.json()["ai_daily_budget_usd"] is None
+
+
 def test_create_wallet_backdated_rejected(client):
     headers = _auth_headers(client)
     strategy_id = _create_strategy(client, headers)

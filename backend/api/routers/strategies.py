@@ -14,6 +14,7 @@ from backend.engine.graph.registry import get_node_type
 from backend.engine.graph.spec import StrategySpec
 from backend.engine.graph.validator import GraphValidationError, validate_spec
 from backend.engine.lab_stats import lineage_experiments, search_counter as _search_counter
+from backend.sources.ai_judgment import DisabledAIJudgmentAdapter
 from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
 from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
 from backend.sources.registry import SourceRegistry
@@ -108,6 +109,7 @@ def _compile_graph(db: Session, spec: StrategySpec) -> CompiledGraph:
     registry = SourceRegistry()
     registry.register(PriceBarsFeatureAdapter(price_bars))
     registry.register(FinvizScreenAdapter(screener))
+    registry.register(DisabledAIJudgmentAdapter())
     return CompiledGraph(spec, registry)
 
 

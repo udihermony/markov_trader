@@ -118,3 +118,43 @@ def test_ai_in_trigger_rejected():
     spec = spec.model_copy(update={"nodes": nodes})
     with pytest.raises(GraphValidationError, match="AI-backed"):
         validate_spec(spec)
+
+
+def test_ai_rejected_in_confirm_even_with_looser_allowed_kinds():
+    # allowed_kinds alone permits confirm here — proves the maturity check
+    # is a second, independent line of defense (same shape as the trigger
+    # test above), not something a node type's allowed_kinds could bypass.
+    register_node_type(
+        NodeTypeInfo("fake_ai_confirm", frozenset({"confirm", "veto"}), "AI", lambda params, registry: object())
+    )
+    spec = make_valid_spec()
+    nodes = [*spec.nodes, NodeSpec(id="c1", kind="confirm", type="fake_ai_confirm", params={})]
+    spec = spec.model_copy(update={"nodes": nodes, "edges": [*spec.edges, ("t1", "c1")]})
+    with pytest.raises(GraphValidationError, match="AI-backed"):
+        validate_spec(spec)
+
+
+def test_ai_news_check_rejected_in_confirm_by_allowed_kinds():
+    # ai_news_check's own allowed_kinds is {"veto"} — confirm is already
+    # rejected before the AI-specific check even runs.
+    spec = make_valid_spec()
+    nodes = [*spec.nodes, NodeSpec(id="c1", kind="confirm", type="ai_news_check", params={})]
+    spec = spec.model_copy(update={"nodes": nodes, "edges": [*spec.edges, ("t1", "c1")]})
+    with pytest.raises(GraphValidationError, match="not allowed in kind"):
+        validate_spec(spec)
+
+
+def test_ai_regime_check_allowed_in_veto():
+    spec = make_valid_spec()
+    nodes = [*spec.nodes, NodeSpec(id="v1", kind="veto", type="ai_regime_check", params={})]
+    sources = [*spec.sources, SourceRef(id="ai", type="ai_judgment")]
+    spec = spec.model_copy(update={"nodes": nodes, "sources": sources, "edges": [*spec.edges, ("t1", "v1")]})
+    validate_spec(spec)  # no raise
+
+
+def test_ai_node_without_declared_source_rejected():
+    spec = make_valid_spec()
+    nodes = [*spec.nodes, NodeSpec(id="v1", kind="veto", type="ai_regime_check", params={})]
+    spec = spec.model_copy(update={"nodes": nodes, "edges": [*spec.edges, ("t1", "v1")]})
+    with pytest.raises(GraphValidationError, match="ai_judgment"):
+        validate_spec(spec)

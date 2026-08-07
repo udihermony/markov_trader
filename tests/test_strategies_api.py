@@ -109,6 +109,22 @@ def test_created_strategy_has_trust_label(client):
     assert res.json()["trust_label"] == "point_in_time"  # price_bars is point_in_time
 
 
+def test_strategy_with_ai_veto_node_is_live_only(client):
+    spec = {
+        **VALID_SPEC,
+        "sources": [*VALID_SPEC["sources"], {"id": "ai", "type": "ai_judgment"}],
+        "nodes": [
+            *VALID_SPEC["nodes"],
+            {"id": "v1", "kind": "veto", "type": "ai_regime_check", "params": {}},
+        ],
+        "edges": [*VALID_SPEC["edges"], ["t1", "v1"]],
+    }
+    headers = _auth_headers(client, "ai-trust@example.com")
+    res = client.post("/strategies", json={"name": "AI-gated SMA", "spec": spec}, headers=headers)
+    assert res.status_code == 201
+    assert res.json()["trust_label"] == "live_only"
+
+
 def test_preview_valid_spec_returns_stages_without_persisting(client):
     headers = _auth_headers(client, "preview1@example.com")
     res = client.post("/strategies/preview", json={"spec": VALID_SPEC}, headers=headers)

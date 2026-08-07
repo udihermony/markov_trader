@@ -35,6 +35,10 @@ class CreateWalletRequest(BaseModel):
     strategy_id: int
     initial_cash: float = 100_000.0
     start_date: date | None = None
+    # DESIGN.md M10: "the estimated daily cost is shown before a wallet
+    # with AI nodes is started." None means uncapped — only meaningful for
+    # a strategy that actually contains an AI node; ignored otherwise.
+    ai_daily_budget_usd: float | None = None
 
 
 class WalletResponse(BaseModel):
@@ -48,6 +52,7 @@ class WalletResponse(BaseModel):
     is_benchmark: bool
     created_at: datetime
     retired_at: datetime | None
+    ai_daily_budget_usd: float | None
 
 
 class PositionResponse(BaseModel):
@@ -84,6 +89,7 @@ def _to_response(wallet: Wallet) -> WalletResponse:
         initial_cash=float(wallet.initial_cash), cash=float(wallet.cash),
         start_date=wallet.start_date, status=wallet.status, is_benchmark=wallet.is_benchmark,
         created_at=wallet.created_at, retired_at=wallet.retired_at,
+        ai_daily_budget_usd=float(wallet.ai_daily_budget_usd) if wallet.ai_daily_budget_usd is not None else None,
     )
 
 
@@ -135,6 +141,7 @@ def create_wallet(
         user_id=user.id, name=payload.name, strategy_id=strategy.id,
         initial_cash=payload.initial_cash, cash=payload.initial_cash,
         start_date=start_date, status="active", is_benchmark=False,
+        ai_daily_budget_usd=payload.ai_daily_budget_usd,
     )
     db.add(wallet)
     db.commit()

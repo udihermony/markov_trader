@@ -141,6 +141,33 @@ def test_unseal_blocked_once_budget_exhausted(client, db_session):
     assert res2.status_code == 403
 
 
+def test_unseal_blocked_for_real_ai_veto_strategy(client, db_session):
+    # No monkeypatch — this is M10's own live_only source making the M7
+    # guard reachable for real, not just via a faked graph.
+    ai_spec = {
+        **ALWAYS_BUY_SPEC,
+        "sources": [*ALWAYS_BUY_SPEC["sources"], {"id": "ai", "type": "ai_judgment"}],
+        "nodes": [
+            *ALWAYS_BUY_SPEC["nodes"],
+            {"id": "v1", "kind": "veto", "type": "ai_regime_check", "params": {}},
+        ],
+        "edges": [*ALWAYS_BUY_SPEC["edges"], ["t1", "v1"]],
+    }
+    headers = _auth_headers(client, "ai-holdout@example.com")
+    strategy = client.post("/strategies", json={"name": "AI Gated", "spec": ai_spec}, headers=headers).json()
+    assert strategy["trust_label"] == "live_only"
+    holdout = client.post(
+        "/holdouts", json={"start_date": str(HOLDOUT_START), "end_date": str(HOLDOUT_END)}, headers=headers
+    ).json()
+
+    res = client.post(
+        f"/holdouts/{holdout['id']}/unseal",
+        json={"strategy_id": strategy["id"], "hypothesis": "h", "expected_outcome": "e"},
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+
 def test_unseal_blocked_for_live_only_strategy(client, db_session, monkeypatch):
     headers = _auth_headers(client)
     strategy = _create_strategy(client, headers)

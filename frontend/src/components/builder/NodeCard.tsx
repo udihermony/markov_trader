@@ -5,6 +5,7 @@ import { Card } from '../ui/Card'
 
 interface NodeCardProps {
   node: NodeSpec
+  isAi?: boolean
   description?: string
   candidatesBefore?: number
   candidatesAfter?: number
@@ -17,7 +18,7 @@ interface NodeCardProps {
 }
 
 export function NodeCard({
-  node, description, candidatesBefore, candidatesAfter, missingDataCount,
+  node, isAi, description, candidatesBefore, candidatesAfter, missingDataCount,
   canMoveUp, canMoveDown, onMoveUp, onMoveDown, onRemove,
 }: NodeCardProps) {
   const hasCounts = candidatesBefore !== undefined && candidatesAfter !== undefined
@@ -27,6 +28,7 @@ export function NodeCard({
       <div className="min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <Badge tone="neutral">{node.type}</Badge>
+          {isAi && <Badge tone="amber">AI</Badge>}
           {hasCounts && (
             <span className="text-xs font-mono text-slate-400">
               {candidatesBefore} → {candidatesAfter}

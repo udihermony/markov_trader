@@ -5,7 +5,8 @@ from datetime import date, timedelta
 
 from sqlalchemy import select
 
-from backend.db.models import EquitySnapshot, Fill, Instrument, PriceBar, Strategy, User, Wallet
+from backend.ai.provider import ProviderResponse, ToolCall, TokenUsage
+from backend.db.models import AiJudgment, EquitySnapshot, Fill, Instrument, PriceBar, Strategy, User, Wallet
 from backend.sources.price_bars import PriceBarsSource
 from backend.worker import wallet_runner
 from backend.worker.wallet_runner import run_all_active_wallets, run_wallet_day
@@ -80,6 +81,78 @@ def test_run_wallet_day_creates_fill_and_snapshot(db_session, monkeypatch):
         select(EquitySnapshot).where(EquitySnapshot.wallet_id == wallet.id)
     ).scalars().all()
     assert len(snapshots) == 2
+
+
+class FakeProvider:
+    """Scripted LLMProvider — same test double shape as test_copilot.py's,
+    always returning an 'ok' verdict so the trade still fills."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, messages, tools, system):
+        self.calls += 1
+        call = ToolCall(id="call_1", name="record_judgment", input={"verdict": "ok", "explanation": "fine"})
+        return ProviderResponse(
+            text=None, tool_calls=[call], stop_reason="tool_use", raw_content=[],
+            usage=TokenUsage(input_tokens=100, output_tokens=20),
+        )
+
+
+def make_ai_wallet(db_session, ticker: str, cash: float = 100_000.0) -> Wallet:
+    user = User(email=f"ai-runner-{ticker.lower()}@example.com", password_hash="x")
+    db_session.add(user)
+    db_session.flush()
+    spec = {
+        **ALWAYS_BUY_SPEC,
+        "sources": [*ALWAYS_BUY_SPEC["sources"], {"id": "ai", "type": "ai_judgment"}],
+        "nodes": [
+            {**ALWAYS_BUY_SPEC["nodes"][0], "params": {"tickers": [ticker]}},
+            *ALWAYS_BUY_SPEC["nodes"][1:],
+            {"id": "v1", "kind": "veto", "type": "ai_regime_check", "params": {}},
+        ],
+        "edges": [*ALWAYS_BUY_SPEC["edges"], ["t1", "v1"]],
+    }
+    strategy = Strategy(user_id=user.id, name="AI Gated", spec_json=spec, spec_version=2)
+    db_session.add(strategy)
+    db_session.flush()
+    wallet = Wallet(
+        user_id=user.id, name="AI Test Wallet", strategy_id=strategy.id,
+        initial_cash=cash, cash=cash, start_date=date(2026, 1, 1), status="active", is_benchmark=False,
+    )
+    db_session.add(wallet)
+    db_session.flush()
+    return wallet
+
+
+def test_ai_veto_wallet_records_one_judgment_and_is_idempotent_on_rerun(db_session, monkeypatch):
+    monkeypatch.setattr(PriceBarsSource, "refresh", lambda self, tickers, as_of: None)
+    fake_provider = FakeProvider()
+    monkeypatch.setattr(wallet_runner, "get_provider_for_user", lambda session, user: fake_provider)
+
+    dates = seed_bars(db_session, "TICK", date(2026, 3, 2))
+    wallet = make_ai_wallet(db_session, "TICK")
+    signal_day = dates[-1]
+
+    run_wallet_day(db_session, wallet, as_of=signal_day)
+
+    judgments = db_session.execute(select(AiJudgment).where(AiJudgment.wallet_id == wallet.id)).scalars().all()
+    assert len(judgments) == 1
+    assert judgments[0].node_type == "ai_regime_check"
+    assert judgments[0].as_of == signal_day
+    assert fake_provider.calls == 1
+
+    # Re-running the exact same day must not double-call the LLM or
+    # double-record a judgment (CLAUDE.md rule 2: the whole day must be
+    # idempotent) — the ticker is already a pending/open order by the time
+    # entries are re-evaluated, so the veto chain never runs again.
+    run_wallet_day(db_session, wallet, as_of=signal_day)
+
+    judgments_after = db_session.execute(
+        select(AiJudgment).where(AiJudgment.wallet_id == wallet.id)
+    ).scalars().all()
+    assert len(judgments_after) == 1
+    assert fake_provider.calls == 1
 
 
 @contextlib.contextmanager

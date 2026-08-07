@@ -1,10 +1,10 @@
 """Spec validation (DESIGN.md §4.6): cycles rejected, kind-ordering
 enforced, feature expressions parsed and checked against declared sources,
-AI-backed node types rejected in `trigger`."""
+AI-backed node types restricted to `veto`."""
 from __future__ import annotations
 
 from backend.engine.graph.registry import get_node_type
-from backend.engine.graph.spec import NodeSpec, StrategySpec
+from backend.engine.graph.spec import NodeSpec, SourceRef, StrategySpec
 from backend.sources.expressions import parse_feature_expression
 
 ENTRY_KIND_ORDER = ["universe", "trigger", "confirm", "veto", "size"]
@@ -28,7 +28,8 @@ def validate_spec(spec: StrategySpec) -> None:
     _check_no_cycles(spec.nodes, spec.edges, nodes_by_id)
     _check_size_node_terminal(spec.edges, nodes_by_id)
     _check_feature_expressions(spec.nodes, source_ids)
-    _check_ai_not_in_trigger(spec.nodes)
+    _check_ai_kind_restricted(spec.nodes)
+    _check_ai_source_declared(spec.nodes, spec.sources)
 
 
 def _check_registered_types_and_kinds(nodes: list[NodeSpec]) -> None:
@@ -129,13 +130,35 @@ def _check_feature_expressions(nodes: list[NodeSpec], source_ids: set[str]) -> N
                 )
 
 
-def _check_ai_not_in_trigger(nodes: list[NodeSpec]) -> None:
+def _check_ai_kind_restricted(nodes: list[NodeSpec]) -> None:
+    """CLAUDE.md rule 5 / DESIGN.md §5.1: AI nodes may veto, never
+    originate a trade. Checked independently of a node type's
+    `allowed_kinds` (M10's `ai_news_check`/`ai_regime_check` only declare
+    `veto` there anyway) so a future AI node type with a looser
+    `allowed_kinds` still can't be placed anywhere but `veto` — this is
+    the single place the restriction is enforced, not a convention."""
     for node in nodes:
-        if node.kind != "trigger":
-            continue
         info = get_node_type(node.type)
-        if info.maturity == "AI":
+        if info.maturity == "AI" and node.kind != "veto":
             raise GraphValidationError(
-                f"node {node.id!r}: AI-backed node type {node.type!r} may not appear in `trigger` "
-                "— AI nodes may only veto or rank (DESIGN.md §5.2)"
+                f"node {node.id!r}: AI-backed node type {node.type!r} may not appear in "
+                f"`{node.kind}` — AI nodes may only veto (DESIGN.md §5.1/§5.2)"
             )
+
+
+def _check_ai_source_declared(nodes: list[NodeSpec], sources: list[SourceRef]) -> None:
+    """An AI node's factory pulls its adapter straight out of the registry
+    (backend/engine/graph/nodes.py, same shape as `finviz_screen`) rather
+    than through a declared `px.foo`-style expression alias, so nothing
+    else would otherwise force a spec to declare it. Requiring the
+    declaration here is what makes `CompiledGraph.trust_label` (which only
+    inspects declared `spec.sources`) actually see the ai_judgment source
+    and report `live_only` — without this check a strategy could silently
+    call a live LLM while still claiming to be backtestable, exactly the
+    dishonest-labelling failure DESIGN.md §5.2 exists to prevent."""
+    has_ai_node = any(get_node_type(n.type).maturity == "AI" for n in nodes)
+    if has_ai_node and not any(s.type == "ai_judgment" for s in sources):
+        raise GraphValidationError(
+            "spec has an AI-backed node but does not declare an `ai_judgment` source — "
+            "add one so the strategy is correctly labelled live_only"
+        )

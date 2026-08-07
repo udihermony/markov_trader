@@ -26,6 +26,7 @@ from backend.engine.graph.compiled import CompiledGraph
 from backend.engine.graph.spec import NodeSpec, SourceRef, StrategySpec
 from backend.engine.orchestrator import Orchestrator
 from backend.engine.sandbox import CostsConfig, Sandbox, SizingConfig
+from backend.sources.ai_judgment import DisabledAIJudgmentAdapter
 from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
 from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
 from backend.sources.registry import SourceRegistry
@@ -81,6 +82,7 @@ def build(session: Session, mode: str, args: argparse.Namespace) -> Orchestrator
     source_registry = SourceRegistry()
     source_registry.register(PriceBarsFeatureAdapter(price_bars))
     source_registry.register(FinvizScreenAdapter(screener))
+    source_registry.register(DisabledAIJudgmentAdapter())
 
     fast_expr = f"sma(px.close, {args.fast})"
     slow_expr = f"sma(px.close, {args.slow})"

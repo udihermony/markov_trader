@@ -295,3 +295,65 @@ register_node_type(NodeTypeInfo(
     params_schema=[ParamField("fraction", "number", "Fraction of cash per trade", default=0.1)],
     describe=lambda params: f"Invests {params['fraction'] * 100:.0f}% of available cash per trade.",
 ))
+
+
+# ------------------------------------------------------------------------ AI
+# DESIGN.md §5.1/§5.2 (M10): AI nodes are restricted to `veto` — they may
+# block a trade the rest of the strategy already wants to make, never
+# originate one (CLAUDE.md rule 5). Both node types share one adapter
+# (`registry.get("ai_judgment")`, backend/sources/ai_judgment.py) — which
+# concrete adapter that resolves to (a real LLM call vs. a disabled no-op)
+# is decided entirely by the caller building the registry, never here. A
+# `missing` judgment (budget exhausted, provider error, unparseable
+# response) is reported via `NodeResult.missing`, which routes through the
+# same per-node `on_missing` policy every other node already has — no new
+# engine mechanism needed for "the AI couldn't answer."
+@dataclass(frozen=True)
+class AINewsCheckNode:
+    adapter: object  # an ai_judgment adapter (Disabled- or Live-)
+
+    def evaluate(self, ctx: NodeContext) -> NodeResult:
+        return _evaluate_ai_judgment(self.adapter, "ai_news_check", ctx)
+
+
+@dataclass(frozen=True)
+class AIRegimeCheckNode:
+    adapter: object
+
+    def evaluate(self, ctx: NodeContext) -> NodeResult:
+        return _evaluate_ai_judgment(self.adapter, "ai_regime_check", ctx)
+
+
+def _evaluate_ai_judgment(adapter: object, node_type: str, ctx: NodeContext) -> NodeResult:
+    judgment = adapter.judge(node_type, ctx.ticker, ctx.as_of)
+    if judgment.missing:
+        return NodeResult(
+            passed=judgment.passed, reason=judgment.reason, explanation=judgment.explanation,
+            missing=["ai_judgment"], metadata={"cost_usd": judgment.cost_usd},
+        )
+    return NodeResult(
+        passed=judgment.passed, reason=judgment.reason, explanation=judgment.explanation,
+        metadata={"cost_usd": judgment.cost_usd},
+    )
+
+
+def _ai_news_check_factory(params: dict, registry: SourceRegistry) -> AINewsCheckNode:
+    _, adapter = registry.get("ai_judgment")
+    return AINewsCheckNode(adapter)
+
+
+def _ai_regime_check_factory(params: dict, registry: SourceRegistry) -> AIRegimeCheckNode:
+    _, adapter = registry.get("ai_judgment")
+    return AIRegimeCheckNode(adapter)
+
+
+register_node_type(NodeTypeInfo(
+    "ai_news_check", frozenset({"veto"}), "AI", _ai_news_check_factory,
+    params_schema=[],
+    describe=lambda params: "Has an AI check for news red flags before buying.",
+))
+register_node_type(NodeTypeInfo(
+    "ai_regime_check", frozenset({"veto"}), "AI", _ai_regime_check_factory,
+    params_schema=[],
+    describe=lambda params: "Has an AI judge whether the market regime looks too risky to buy.",
+))

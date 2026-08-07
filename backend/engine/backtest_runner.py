@@ -34,6 +34,7 @@ from backend.engine.graph.compiled import CompiledGraph
 from backend.engine.graph.spec import StrategySpec
 from backend.engine.orchestrator import Orchestrator
 from backend.engine.sandbox import CostsConfig, Sandbox, SizingConfig
+from backend.sources.ai_judgment import DisabledAIJudgmentAdapter
 from backend.sources.finviz_screen import FinvizScreenAdapter, FinvizScreenSource, ScreenerConfig
 from backend.sources.price_bars import DataConfig, PriceBarsFeatureAdapter, PriceBarsSource
 from backend.sources.registry import SourceRegistry
@@ -170,6 +171,10 @@ def run_ephemeral_backtest(
         registry = SourceRegistry()
         registry.register(PriceBarsFeatureAdapter(price_bars))
         registry.register(FinvizScreenAdapter(screener))
+        # AI nodes are always disabled for ephemeral backtests (DESIGN.md
+        # §5.2: an LLM asked about a past date may simply remember it) —
+        # never calls a real LLM or costs money, regardless of caller.
+        registry.register(DisabledAIJudgmentAdapter())
         graph = CompiledGraph(spec, registry)
 
         orch = Orchestrator(
