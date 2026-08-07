@@ -4,7 +4,7 @@ A swing-trading **practice** environment for non-professional traders. Users ass
 
 Read `DESIGN.md` before making architectural decisions. `REVIEW.md` records what went wrong in the POC — those failures are why several rules below exist.
 
-**Status:** rebuilding against `DESIGN.md`. The POC lives in `legacy/` as a reference implementation and test oracle. It is not the codebase; do not extend it.
+**Status:** rebuilding against `DESIGN.md`. The POC (`legacy/`) has been retired — its role as parity oracle is now `tests/test_backtest_golden.py`, a golden-file regression test against a committed, deterministic price fixture (`tests/golden/`).
 
 ---
 
@@ -40,9 +40,9 @@ A wallet cannot be backdated — that would be a backtest in disguise. Wallets a
 
 ## Tests are the contract
 
-`legacy/tests/` contains 22 tests encoding the invariants above. **They are the acceptance criteria for the rebuild, not leftovers.** Port them; do not weaken them.
+The POC's 22 legacy tests encoded the invariants above and were ported during the rebuild; they are the acceptance criteria, not leftovers — do not weaken what they check.
 
-The gate for milestone M3: the POC's SMA crossover strategy, re-expressed as a node graph, produces byte-identical backtest results against the same data. Until that passes, the engine transplant is unproven and no later milestone should start.
+The M3 gate ("the POC's SMA crossover strategy, re-expressed as a node graph, produces byte-identical backtest results against the same data") is enforced permanently by `tests/test_backtest_golden.py`, not a one-off manual check: it runs the engine over a committed fixture and diffs the real output — fills and final equity/drawdown, not `reason` labels — against a committed golden file on every run. A change that legitimately shifts the numbers regenerates the golden file deliberately (see that file's docstring) and the diff gets reviewed like any other change to committed behavior.
 
 When a test and an implementation disagree about an invariant, the test is right.
 

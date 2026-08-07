@@ -57,10 +57,11 @@ def build_system(session, wallet_row) -> Orchestrator:
     """Builds the same SMA-crossover-as-graph shape backend.engine.cli.build()
     uses (fast=10/slow=20/max_hold_days=5), exercising the same orchestrator
     sequencing as production. This file only asserts against the new engine
-    in isolation (trade/snapshot counts, idempotency) — for the actual
-    byte-identical-against-legacy regression DESIGN.md describes, see
-    test_legacy_parity.py, which runs both engines over identical data and
-    diffs their real output."""
+    in isolation (trade/snapshot counts, idempotency) — for the permanent
+    byte-for-byte regression DESIGN.md's M3 gate describes, see
+    test_backtest_golden.py, which runs this same strategy shape over a
+    committed price fixture and diffs the output against a committed
+    golden file on every run."""
     data_cfg = DataConfig()
     sizing = SizingConfig()
     costs = CostsConfig()

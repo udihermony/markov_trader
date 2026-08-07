@@ -1,0 +1,21 @@
+{
+  "fills": [
+    {
+      "date": "2026-03-04",
+      "ticker": "AAA",
+      "action": "BUY",
+      "shares": 94,
+      "fill_price": 106.053
+    },
+    {
+      "date": "2026-03-12",
+      "ticker": "AAA",
+      "action": "SELL",
+      "shares": 94,
+      "fill_price": 123.938
+    }
+  ],
+  "final_total_equity": 101681.19,
+  "final_benchmark_equity": 106900.0,
+  "max_drawdown_pct": 0.004982
+}

@@ -13,21 +13,7 @@ Rebuilding against [`DESIGN.md`](DESIGN.md). Nothing in the new architecture is 
 | [`DESIGN.md`](DESIGN.md) | The v2 design: principles, surfaces, source and node model, AI copilot, schema, stack, twelve milestones |
 | [`CLAUDE.md`](CLAUDE.md) | Non-negotiable invariants and ground rules — read before changing anything |
 | [`REVIEW.md`](REVIEW.md) | Code review of the POC; several design decisions exist because of these failures |
-| `legacy/` | The working POC. Reference implementation and test oracle — not the codebase |
 
-## About `legacy/`
+## About the POC
 
-The POC proved the engine: `as_of` enforcement, next-open fills, slippage accounting, and within-day idempotency all work and are covered by 22 tests. Those tests are the **acceptance criteria for the rebuild**, not leftovers.
-
-The gate for milestone M3 is that the POC's SMA crossover strategy, re-expressed as a node graph, produces identical backtest results against the same data. `legacy/` is deleted once that passes.
-
-To run the POC in the meantime:
-
-```bash
-cd legacy
-pip install -r requirements.txt
-python main.py backtest --start 2026-01-05 --end 2026-06-30
-python -m pytest tests/
-```
-
-Tagged `v0-poc`.
+The POC (formerly `legacy/`) proved the engine: `as_of` enforcement, next-open fills, slippage accounting, and within-day idempotency all worked and were covered by 22 tests, ported as the acceptance criteria for the rebuild. Its role as parity oracle for the M3 gate — the POC's SMA crossover strategy, re-expressed as a node graph, producing identical backtest results against the same data — is now `tests/test_backtest_golden.py`, a permanent golden-file regression test, so `legacy/` has been removed. The POC itself is still available at the `v0-poc` tag.
