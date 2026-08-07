@@ -205,3 +205,39 @@ export interface ReportCard {
   how_often_right: QuestionAnswer | null
   could_stomach_it: QuestionAnswer | null
 }
+
+// M8 — Copilot
+export interface ApiKeyInfo {
+  provider: string
+  created_at: string
+}
+
+export interface Conversation {
+  id: number
+  created_at: string
+}
+
+export interface StrategyProposal {
+  proposal: true
+  kind: 'create' | 'update'
+  strategy_id?: number
+  name: string
+  spec: StrategySpec
+  before_spec?: StrategySpec
+  trust_label: TrustLabel
+  complexity: { score: number; label: 'Low' | 'Medium' | 'High' }
+  diff_summary: string
+}
+
+export interface ChatMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  proposal_json: StrategyProposal | null
+  created_at: string
+}
+
+export interface CopilotContext {
+  surface: string
+  entity_id?: number
+}

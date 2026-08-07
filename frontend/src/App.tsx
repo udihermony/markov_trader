@@ -1,5 +1,4 @@
-import type { ReactNode } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Outlet, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { LoginPage } from './pages/LoginPage'
@@ -12,11 +11,18 @@ import { StrategiesPage } from './pages/StrategiesPage'
 import { PresetPickerPage } from './pages/PresetPickerPage'
 import { StrategyBuilderPage } from './pages/StrategyBuilderPage'
 import { LabPage } from './pages/LabPage'
+import { SettingsPage } from './pages/SettingsPage'
 
-function protect(children: ReactNode) {
+// A single shared parent route element, not one Layout instance per page
+// (each individually wrapping itself in <protect(...)>) — the previous
+// per-route wrapping remounted Layout (and the copilot panel inside it) on
+// every navigation, silently starting a new chat conversation each time.
+function ProtectedLayout() {
   return (
     <ProtectedRoute>
-      <Layout>{children}</Layout>
+      <Layout>
+        <Outlet />
+      </Layout>
     </ProtectedRoute>
   )
 }
@@ -26,15 +32,18 @@ function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
-      <Route path="/" element={protect(<TodayPage />)} />
-      <Route path="/wallets" element={protect(<WalletsPage />)} />
-      <Route path="/wallets/new" element={protect(<CreateWalletPage />)} />
-      <Route path="/wallets/:id" element={protect(<WalletDetailPage />)} />
-      <Route path="/strategies" element={protect(<StrategiesPage />)} />
-      <Route path="/strategies/new" element={protect(<PresetPickerPage />)} />
-      <Route path="/strategies/new/build" element={protect(<StrategyBuilderPage />)} />
-      <Route path="/strategies/:id/edit" element={protect(<StrategyBuilderPage />)} />
-      <Route path="/lab" element={protect(<LabPage />)} />
+      <Route element={<ProtectedLayout />}>
+        <Route path="/" element={<TodayPage />} />
+        <Route path="/wallets" element={<WalletsPage />} />
+        <Route path="/wallets/new" element={<CreateWalletPage />} />
+        <Route path="/wallets/:id" element={<WalletDetailPage />} />
+        <Route path="/strategies" element={<StrategiesPage />} />
+        <Route path="/strategies/new" element={<PresetPickerPage />} />
+        <Route path="/strategies/new/build" element={<StrategyBuilderPage />} />
+        <Route path="/strategies/:id/edit" element={<StrategyBuilderPage />} />
+        <Route path="/lab" element={<LabPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+      </Route>
     </Routes>
   )
 }

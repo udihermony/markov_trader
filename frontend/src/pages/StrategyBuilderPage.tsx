@@ -44,11 +44,15 @@ export function StrategyBuilderPage() {
   const [nodes, setNodes] = useState<NodeSpec[]>(initialPresetSpec?.nodes ?? [])
 
   useEffect(() => {
-    if (existingStrategy) {
+    // Skip the fetched-strategy overwrite when a proposal seeded this page
+    // (e.g. the copilot's "Review in builder" link) — otherwise the
+    // proposed-but-unsaved spec is clobbered by the currently-saved one
+    // the instant the fetch resolves.
+    if (existingStrategy && !initialPresetSpec) {
       setName(existingStrategy.name)
       setNodes(existingStrategy.spec.nodes)
     }
-  }, [existingStrategy])
+  }, [existingStrategy, initialPresetSpec])
 
   const spec: StrategySpec = useMemo(
     () => ({ spec_version: 2, name, sources: FIXED_SOURCES, nodes, edges: buildEdges(nodes) }),

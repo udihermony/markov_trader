@@ -26,6 +26,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://swing:swing@postgres:5432/markov_trader
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-gaO00p7mU3YKkD25WbYhMTe3OXfJHAIDJC0MnKWm084=}
     ports:
       - "8000:8000"
 

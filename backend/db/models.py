@@ -215,3 +215,47 @@ class Experiment(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ApiKey(Base):
+    """Per-user BYO LLM keys (DESIGN.md §5.6/§6), encrypted at rest via
+    backend/api/encryption.py — never stored or returned in plaintext."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_api_keys_user_provider"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(nullable=False)
+    encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ChatMessage(Base):
+    """Only user/assistant turns are persisted — intermediate tool-call
+    bookkeeping within a turn lives only for the duration of that request
+    (backend/ai/copilot.py), not as separate rows here."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (CheckConstraint("role IN ('user','assistant')", name="ck_chat_messages_role"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), nullable=False)
+    role: Mapped[str] = mapped_column(nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    proposal_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

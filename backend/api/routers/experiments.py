@@ -19,6 +19,7 @@ from backend.api.deps import get_current_user, get_db
 from backend.api.routers.strategies import _validate_or_422
 from backend.db.models import Experiment, Strategy, User
 from backend.engine.backtest_runner import calibrated_entry_probability, run_ephemeral_backtest
+from backend.engine.spec_diff import diff_summary as _diff_summary
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
@@ -41,27 +42,6 @@ def _compose_actual_outcome(metrics: dict) -> str:
         parts.append(f"{metrics['hit_rate']:.0f}% hit rate")
     parts.append(f"max drawdown {metrics['max_drawdown_pct']:.1f}%")
     return ", ".join(parts) + "."
-
-
-def _diff_summary(prev_spec: dict | None, spec: dict) -> str:
-    if prev_spec is None:
-        return "baseline"
-    prev_nodes = {n["id"]: n for n in prev_spec.get("nodes", [])}
-    nodes = {n["id"]: n for n in spec.get("nodes", [])}
-    changes: list[str] = []
-    for node_id, node in nodes.items():
-        prev_node = prev_nodes.get(node_id)
-        if prev_node is None:
-            changes.append(f"added {node['type']} ({node['kind']})")
-            continue
-        for key, value in node.get("params", {}).items():
-            old = prev_node.get("params", {}).get(key)
-            if old != value:
-                changes.append(f"{key}: {old}→{value}")
-    for node_id, prev_node in prev_nodes.items():
-        if node_id not in nodes:
-            changes.append(f"removed {prev_node['type']} ({prev_node['kind']})")
-    return ", ".join(changes) if changes else "no changes"
 
 
 def _override_param(spec_dict: dict, node_id: str, param_name: str, value: object) -> dict:
