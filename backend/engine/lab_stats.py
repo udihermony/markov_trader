@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session
 
 from backend.db.models import Experiment, Strategy
 
+# DESIGN.md §5.4: "the search counter promoted from advisory to load-bearing
+# — past a threshold the copilot must stop searching and recommend a
+# holdout test." Applied in backend/ai/tools.py (chat) and
+# backend/ai/unattended.py (background sessions) alike.
+SEARCH_COUNT_THRESHOLD = 20
+
 
 def lineage_root_id(db: Session, strategy_id: int) -> int:
     current_id = strategy_id
@@ -64,6 +70,11 @@ def search_counter(db: Session, strategy_id: int) -> tuple[int, float | None]:
             if v is not None:
                 best = v if best is None else max(best, v)
     return count, best
+
+
+def over_search_threshold(db: Session, strategy_id: int) -> bool:
+    count, _ = search_counter(db, strategy_id)
+    return count >= SEARCH_COUNT_THRESHOLD
 
 
 def lineage_experiments(db: Session, strategy_id: int) -> list[Experiment]:

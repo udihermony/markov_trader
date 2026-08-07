@@ -43,6 +43,7 @@ class StrategyResponse(BaseModel):
     spec: dict
     trust_label: str
     parent_id: int | None
+    created_by: str
     created_at: datetime
 
 
@@ -63,6 +64,11 @@ class ReportCardResponse(BaseModel):
 class SearchCounterResponse(BaseModel):
     count: int
     best_return_pct: float | None
+
+
+class CalibrationResponse(BaseModel):
+    predicted: int
+    correct: int
 
 
 class FunnelStageResponse(BaseModel):
@@ -110,7 +116,7 @@ def _to_response(strategy: Strategy, db: Session) -> StrategyResponse:
     return StrategyResponse(
         id=strategy.id, name=strategy.name, spec_version=strategy.spec_version,
         spec=strategy.spec_json, trust_label=graph.trust_label.value, parent_id=strategy.parent_id,
-        created_at=strategy.created_at,
+        created_by=strategy.created_by, created_at=strategy.created_at,
     )
 
 
@@ -297,3 +303,21 @@ def get_report_card(
         beat_doing_nothing=beat_doing_nothing, real_or_luck=real_or_luck,
         how_often_right=how_often_right, could_stomach_it=could_stomach_it,
     )
+
+
+@router.get("/{strategy_id}/calibration", response_model=CalibrationResponse)
+def get_calibration(
+    strategy_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> CalibrationResponse:
+    """DESIGN.md §5.4: "producing a calibration score for the copilot
+    itself: 'Claude predicted 12 outcomes and got 4 right.'" Only AI-run
+    experiments count — a human's own Yes/No self-judgment (M7) is a
+    different kind of record, not the AI grading itself (M9)."""
+    _owned_or_404(strategy_id, user, db)
+    ai_experiments = [
+        e for e in lineage_experiments(db, strategy_id)
+        if e.user_id == user.id and e.initiated_by == "ai" and e.prediction_correct is not None
+    ]
+    predicted = len(ai_experiments)
+    correct = sum(1 for e in ai_experiments if e.prediction_correct is True)
+    return CalibrationResponse(predicted=predicted, correct=correct)

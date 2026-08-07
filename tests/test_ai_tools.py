@@ -176,11 +176,87 @@ def test_run_backtest_tool_persists_a_real_experiment(db_session, monkeypatch):
 
     assert "error" not in result
     assert result["result_json"]["metrics"]["n_trades"] == 1
+    assert result["initiated_by"] == "user"  # default when no initiated_by is passed
     count = db_session.execute(select(func.count()).select_from(Experiment)).scalar_one()
     assert count == 1
+
+
+def test_run_backtest_tool_threads_initiated_by_through(db_session, monkeypatch):
+    from backend.sources.price_bars import PriceBarsSource
+
+    monkeypatch.setattr(PriceBarsSource, "_refresh_one", lambda self, ticker, start, end: None)
+    start, end = date(2026, 2, 2), date(2026, 3, 6)
+    _seed_bars(db_session, "TICK", start - timedelta(days=120), end)
+    _seed_bars(db_session, "SPY", start - timedelta(days=120), end)
+
+    user = _make_user(db_session)
+    strategy = _make_strategy(db_session, user, spec=ALWAYS_BUY_SPEC, name="Always Buy")
+
+    result = execute_tool(
+        "run_backtest",
+        {
+            "strategy_id": strategy.id, "hypothesis": "h", "expected_outcome": "e",
+            "period_start": str(start), "period_end": str(end),
+        },
+        db_session, user, initiated_by="ai",
+    )
+
+    assert result["initiated_by"] == "ai"
 
 
 def test_unknown_tool_returns_error(db_session):
     user = _make_user(db_session)
     result = execute_tool("delete_everything", {}, db_session, user)
     assert "error" in result
+
+
+def _seed_experiments(db_session, user, strategy, n: int) -> None:
+    from backend.engine.lab_stats import SEARCH_COUNT_THRESHOLD  # noqa: F401  (documents the relation)
+
+    for i in range(n):
+        db_session.add(
+            Experiment(
+                user_id=user.id, strategy_id=strategy.id, hypothesis=f"h{i}", expected_outcome=f"e{i}",
+                actual_outcome="whatever", period_start=date(2026, 1, 1), period_end=date(2026, 2, 1),
+                spec_snapshot_json=VALID_SPEC, result_json={"metrics": {"total_return_pct": 1.0}},
+            )
+        )
+    db_session.flush()
+
+
+def test_run_backtest_refuses_once_search_threshold_is_exceeded(db_session):
+    user = _make_user(db_session)
+    strategy = _make_strategy(db_session, user)
+    _seed_experiments(db_session, user, strategy, 20)
+
+    result = execute_tool(
+        "run_backtest",
+        {
+            "strategy_id": strategy.id, "hypothesis": "h", "expected_outcome": "e",
+            "period_start": "2026-01-01", "period_end": "2026-02-01",
+        },
+        db_session, user,
+    )
+    assert "error" in result
+    assert "holdout" in result["error"]
+
+    before = db_session.execute(select(func.count()).select_from(Experiment)).scalar_one()
+    assert before == 20  # nothing new was persisted by the refused call
+
+
+def test_run_neighbourhood_scan_refuses_once_search_threshold_is_exceeded(db_session):
+    user = _make_user(db_session)
+    strategy = _make_strategy(db_session, user)
+    _seed_experiments(db_session, user, strategy, 20)
+
+    result = execute_tool(
+        "run_neighbourhood_scan",
+        {
+            "strategy_id": strategy.id, "node_id": "s1", "param_name": "fraction", "values": [0.1, 0.2],
+            "period_start": "2026-01-01", "period_end": "2026-02-01",
+            "hypothesis": "h", "expected_outcome": "e",
+        },
+        db_session, user,
+    )
+    assert "error" in result
+    assert "holdout" in result["error"]

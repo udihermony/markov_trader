@@ -20,6 +20,7 @@ the M8 plan.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -27,13 +28,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.api.routers import experiments, strategies, wallets
-from backend.api.routers.experiments import (
-    CreateExperimentRequest,
-    LuckTestRequest,
-    NeighbourhoodScanRequest,
-)
+from backend.api.routers.experiments import LuckTestRequest, NeighbourhoodScanRequest
 from backend.db.models import User
 from backend.engine.complexity import compute_complexity
+from backend.engine.lab_stats import SEARCH_COUNT_THRESHOLD, over_search_threshold
 from backend.engine.spec_diff import diff_summary
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -201,15 +199,15 @@ def _serialize(obj: Any) -> Any:
     return obj
 
 
-def _tool_list_strategies(db: Session, user: User, _input: dict) -> Any:
+def _tool_list_strategies(db: Session, user: User, _input: dict, _initiated_by: str) -> Any:
     return strategies.list_strategies(user=user, db=db)
 
 
-def _tool_get_strategy(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_get_strategy(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     return strategies.get_strategy(strategy_id=tool_input["strategy_id"], user=user, db=db)
 
 
-def _tool_validate_strategy(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_validate_strategy(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     spec = strategies._validate_or_422(tool_input["spec"])  # noqa: SLF001 — same helper the route uses
     graph = strategies._compile_graph(db, spec)  # noqa: SLF001
     complexity = compute_complexity(spec)
@@ -219,7 +217,7 @@ def _tool_validate_strategy(db: Session, user: User, tool_input: dict) -> Any:
     }
 
 
-def _tool_create_strategy(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_create_strategy(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     spec_dict = tool_input["spec"]
     spec = strategies._validate_or_422(spec_dict)  # noqa: SLF001
     graph = strategies._compile_graph(db, spec)  # noqa: SLF001
@@ -232,7 +230,7 @@ def _tool_create_strategy(db: Session, user: User, tool_input: dict) -> Any:
     }
 
 
-def _tool_update_strategy(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_update_strategy(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     existing = strategies._owned_or_404(tool_input["strategy_id"], user, db)  # noqa: SLF001
     spec_dict = tool_input["spec"]
     spec = strategies._validate_or_422(spec_dict)  # noqa: SLF001
@@ -246,44 +244,101 @@ def _tool_update_strategy(db: Session, user: User, tool_input: dict) -> Any:
     }
 
 
-def _tool_run_backtest(db: Session, user: User, tool_input: dict) -> Any:
-    payload = CreateExperimentRequest.model_validate(tool_input)
-    return experiments.create_experiment(payload, user=user, db=db)
+def _search_budget_error(db: Session, strategy_id: int) -> dict | None:
+    """DESIGN.md §5.4: "the search counter promoted from advisory to
+    load-bearing — past a threshold the copilot must stop searching and
+    recommend a holdout test." Enforced here, not just prompted — applies
+    to both the chat copilot and unattended sessions (ai/unattended.py
+    reuses this same check)."""
+    if over_search_threshold(db, strategy_id):
+        return {
+            "error": (
+                f"This idea has already been searched {SEARCH_COUNT_THRESHOLD}+ times — "
+                "further Lab searches are blocked. Recommend the user spend a holdout unseal "
+                "instead of running more experiments on this lineage."
+            )
+        }
+    return None
 
 
-def _tool_list_experiments(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_run_backtest(db: Session, user: User, tool_input: dict, initiated_by: str) -> Any:
+    """Bypasses the `create_experiment` route handler (rather than calling
+    it directly) so `initiated_by` can be threaded through without exposing
+    it as an HTTP-settable field on the real endpoint — a bare kwarg on a
+    FastAPI route function is inferred as a query parameter, which would let
+    any client claim `initiated_by=ai` for itself."""
+    if (blocked := _search_budget_error(db, tool_input["strategy_id"])) is not None:
+        return blocked
+    strategy = experiments._owned_strategy(db, user, tool_input["strategy_id"])  # noqa: SLF001
+    experiment = experiments._run_and_record(  # noqa: SLF001
+        db, user, strategy, strategy.spec_json,
+        hypothesis=tool_input["hypothesis"], expected_outcome=tool_input["expected_outcome"],
+        period_start=date.fromisoformat(tool_input["period_start"]),
+        period_end=date.fromisoformat(tool_input["period_end"]),
+        initiated_by=initiated_by,
+    )
+    return experiments.ExperimentResponse(**experiments._to_dict(experiment))  # noqa: SLF001
+
+
+def _tool_list_experiments(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     return experiments.list_experiments(strategy_id=tool_input["strategy_id"], user=user, db=db)
 
 
-def _tool_get_experiment(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_get_experiment(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     return experiments.get_experiment(experiment_id=tool_input["experiment_id"], user=user, db=db)
 
 
-def _tool_run_luck_test(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_run_luck_test(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     payload = LuckTestRequest.model_validate(tool_input)
     return experiments.luck_test(payload, user=user, db=db)
 
 
-def _tool_run_neighbourhood_scan(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_run_neighbourhood_scan(db: Session, user: User, tool_input: dict, initiated_by: str) -> Any:
+    """Same route-handler bypass as `_tool_run_backtest`, and for the same
+    reason — every scan point needs the correct `initiated_by`."""
+    if (blocked := _search_budget_error(db, tool_input["strategy_id"])) is not None:
+        return blocked
     payload = NeighbourhoodScanRequest.model_validate(tool_input)
-    return experiments.neighbourhood_scan(payload, user=user, db=db)
+    strategy = experiments._owned_strategy(db, user, payload.strategy_id)  # noqa: SLF001
+    points = []
+    for value in payload.values:
+        spec_dict = experiments._override_param(  # noqa: SLF001
+            strategy.spec_json, payload.node_id, payload.param_name, value
+        )
+        experiment = experiments._run_and_record(  # noqa: SLF001
+            db, user, strategy, spec_dict,
+            hypothesis=payload.hypothesis, expected_outcome=payload.expected_outcome,
+            period_start=payload.period_start, period_end=payload.period_end,
+            initiated_by=initiated_by,
+        )
+        experiment.result_json = {
+            **experiment.result_json, "scan_param": payload.param_name, "scan_value": value,
+        }
+        db.commit()
+        points.append(
+            experiments.NeighbourhoodScanPoint(
+                value=value, total_return_pct=experiment.result_json["metrics"]["total_return_pct"],
+                experiment_id=experiment.id,
+            )
+        )
+    return points
 
 
-def _tool_list_wallets(db: Session, user: User, _input: dict) -> Any:
+def _tool_list_wallets(db: Session, user: User, _input: dict, _initiated_by: str) -> Any:
     return wallets.list_wallets(user=user, db=db)
 
 
-def _tool_get_wallet(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_get_wallet(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     return wallets.get_wallet(wallet_id=tool_input["wallet_id"], user=user, db=db)
 
 
-def _tool_get_wallet_trades(db: Session, user: User, tool_input: dict) -> Any:
+def _tool_get_wallet_trades(db: Session, user: User, tool_input: dict, _initiated_by: str) -> Any:
     return wallets.get_wallet_fills(
         wallet_id=tool_input["wallet_id"], limit=tool_input.get("limit", 50), user=user, db=db
     )
 
 
-_DISPATCH: dict[str, Callable[[Session, User, dict], Any]] = {
+_DISPATCH: dict[str, Callable[[Session, User, dict, str], Any]] = {
     "list_strategies": _tool_list_strategies,
     "get_strategy": _tool_get_strategy,
     "validate_strategy": _tool_validate_strategy,
@@ -300,12 +355,12 @@ _DISPATCH: dict[str, Callable[[Session, User, dict], Any]] = {
 }
 
 
-def execute_tool(name: str, tool_input: dict, db: Session, user: User) -> dict:
+def execute_tool(name: str, tool_input: dict, db: Session, user: User, initiated_by: str = "user") -> dict:
     handler = _DISPATCH.get(name)
     if handler is None:
         return {"error": f"unknown tool {name!r}"}
     try:
-        return _serialize(handler(db, user, tool_input))
+        return _serialize(handler(db, user, tool_input, initiated_by))
     except HTTPException as exc:
         return {"error": str(exc.detail)}
     except Exception as exc:  # noqa: BLE001 — fed back to the model as a tool error, not a crash

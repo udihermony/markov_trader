@@ -29,6 +29,19 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """DESIGN.md §5.4: "per-user token budget with visible spend." Visible
+    only for v1 (M9 plan) — every call's real usage is captured here and
+    summed by callers (backend/ai/unattended.py), nothing is hard-capped yet."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(self.input_tokens + other.input_tokens, self.output_tokens + other.output_tokens)
+
+
+@dataclass(frozen=True)
 class ProviderResponse:
     text: str | None
     tool_calls: list[ToolCall]
@@ -37,6 +50,7 @@ class ProviderResponse:
     # a tool-use conversation (the assistant turn that requested tools must
     # be echoed back exactly in the next request's message history).
     raw_content: list[dict] = field(default_factory=list)
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 class LLMProvider(Protocol):
@@ -99,6 +113,9 @@ class AnthropicProvider:
             tool_calls=tool_calls,
             stop_reason=response.stop_reason,
             raw_content=raw_content,
+            usage=TokenUsage(
+                input_tokens=response.usage.input_tokens, output_tokens=response.usage.output_tokens
+            ),
         )
 
 

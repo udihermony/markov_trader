@@ -204,3 +204,41 @@ def test_search_counter_and_report_card_start_empty(client):
 
     report = client.get(f"/strategies/{strategy['id']}/report-card", headers=headers).json()
     assert report["has_evidence"] is False
+
+
+def test_calibration_only_counts_graded_ai_experiments(client, db_session):
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from backend.db.models import Experiment, User
+
+    headers = _auth_headers(client, "calibration@example.com")
+    strategy = client.post("/strategies", json={"name": "SMA", "spec": VALID_SPEC}, headers=headers).json()
+
+    empty = client.get(f"/strategies/{strategy['id']}/calibration", headers=headers).json()
+    assert empty == {"predicted": 0, "correct": 0}
+
+    user = db_session.execute(select(User).where(User.email == "calibration@example.com")).scalar_one()
+    rows = [
+        # AI, graded correct -> counts
+        dict(initiated_by="ai", prediction_correct=True),
+        # AI, graded wrong -> counts, but not "correct"
+        dict(initiated_by="ai", prediction_correct=False),
+        # AI, ungraded -> doesn't count
+        dict(initiated_by="ai", prediction_correct=None),
+        # human, graded -> doesn't count (different kind of record, M7 not M9)
+        dict(initiated_by="user", prediction_correct=True),
+    ]
+    for i, row in enumerate(rows):
+        db_session.add(
+            Experiment(
+                user_id=user.id, strategy_id=strategy["id"], hypothesis=f"h{i}", expected_outcome=f"e{i}",
+                actual_outcome="x", period_start=date(2026, 1, 1), period_end=date(2026, 2, 1),
+                spec_snapshot_json=VALID_SPEC, result_json={"metrics": {"total_return_pct": 1.0}}, **row,
+            )
+        )
+    db_session.commit()
+
+    calibration = client.get(f"/strategies/{strategy['id']}/calibration", headers=headers).json()
+    assert calibration == {"predicted": 2, "correct": 1}

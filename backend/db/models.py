@@ -75,6 +75,7 @@ class Strategy(Base):
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
     )
+    created_by: Mapped[str] = mapped_column(nullable=False, server_default="user")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -259,3 +260,28 @@ class ChatMessage(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class Job(Base):
+    """The Postgres-backed job queue DESIGN.md §7 describes — claimed via
+    `SELECT ... FOR UPDATE SKIP LOCKED` (backend/worker/jobs.py), not the
+    POC's single `threading.Lock`. `type` is a plain string; M9 only ever
+    dispatches `"unattended_experiment_session"`."""
+
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','running','completed','failed')", name="ck_jobs_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    type: Mapped[str] = mapped_column(nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(nullable=False, server_default="pending")
+    progress: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

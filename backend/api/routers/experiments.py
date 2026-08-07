@@ -114,7 +114,7 @@ class LuckTestResponse(BaseModel):
 def _run_and_record(
     db: Session, user: User, strategy: Strategy, spec_dict: dict, *,
     hypothesis: str, expected_outcome: str, period_start: date, period_end: date,
-    is_holdout: bool = False,
+    is_holdout: bool = False, initiated_by: str = "user",
 ) -> Experiment:
     spec = _validate_or_422(spec_dict)
     # Reuse the request's own connection — see backtest_runner.run_ephemeral_backtest's
@@ -127,7 +127,7 @@ def _run_and_record(
         user_id=user.id, strategy_id=strategy.id, hypothesis=hypothesis,
         expected_outcome=expected_outcome, actual_outcome=_compose_actual_outcome(metrics),
         period_start=period_start, period_end=period_end, is_holdout=is_holdout,
-        spec_snapshot_json=spec_dict,
+        spec_snapshot_json=spec_dict, initiated_by=initiated_by,
         result_json={"metrics": metrics, "equity_curve": result.equity_curve, "fills": result.fills},
     )
     db.add(experiment)

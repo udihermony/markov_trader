@@ -58,6 +58,7 @@ export function StrategiesPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge tone={trust.tone}>{trust.text}</Badge>
                     <Badge tone="neutral">{complexity.label} complexity</Badge>
+                    {strategy.created_by === 'ai' && <Badge tone="neutral">Built by AI</Badge>}
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
                     Created {new Date(strategy.created_at).toLocaleDateString()}

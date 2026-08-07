@@ -10,6 +10,7 @@ import { LuckTest } from '../components/lab/LuckTest'
 import { NeighbourhoodScan } from '../components/lab/NeighbourhoodScan'
 import { ReportCard } from '../components/lab/ReportCard'
 import { SearchCounterBanner } from '../components/lab/SearchCounterBanner'
+import { UnattendedSession } from '../components/lab/UnattendedSession'
 
 export function LabPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -55,6 +56,7 @@ export function LabPage() {
         <>
           <SearchCounterBanner strategyId={selected.id} luckNullSamples={luckNullSamples} />
           <ExperimentForm strategyId={selected.id} />
+          <UnattendedSession strategyId={selected.id} />
           <NeighbourhoodScan strategyId={selected.id} spec={selected.spec} />
           <LuckTest strategyId={selected.id} onResult={setLuckNullSamples} />
           <HoldoutPanel strategyId={selected.id} />

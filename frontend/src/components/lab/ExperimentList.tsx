@@ -31,6 +31,7 @@ export function ExperimentList({ strategyId }: { strategyId: number }) {
             <div key={e.id} className="border border-slate-200 rounded-md p-3">
               <div className="flex items-center gap-2 flex-wrap mb-1">
                 {e.is_holdout && <Badge tone="amber">Holdout</Badge>}
+                {e.initiated_by === 'ai' && <Badge tone="neutral">AI</Badge>}
                 <span className="text-xs text-slate-400">
                   {e.period_start} → {e.period_end}
                 </span>

@@ -22,6 +22,7 @@ export interface Strategy {
   spec: StrategySpec
   trust_label: TrustLabel
   parent_id: number | null
+  created_by: 'user' | 'ai'
   created_at: string
 }
 
@@ -240,4 +241,30 @@ export interface ChatMessage {
 export interface CopilotContext {
   surface: string
   entity_id?: number
+}
+
+// M9 — Unattended experiments
+export interface UnattendedSessionResult {
+  digest: string
+  experiment_ids: number[]
+  strategies_created: number[]
+  tokens: { input: number; output: number }
+  calibration: { predicted: number; correct: number }
+}
+
+export interface Job {
+  id: number
+  type: string
+  payload_json: Record<string, unknown>
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  progress: Record<string, unknown> | null
+  result_json: UnattendedSessionResult | { error: string } | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface Calibration {
+  predicted: number
+  correct: number
 }
