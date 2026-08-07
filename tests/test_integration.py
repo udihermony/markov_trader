@@ -55,10 +55,12 @@ def seed_watchlist(session, ticker: str, days: list[date]) -> None:
 
 def build_system(session, wallet_row) -> Orchestrator:
     """Builds the same SMA-crossover-as-graph shape backend.engine.cli.build()
-    uses (fast=10/slow=20/max_hold_days=5) — the concrete byte-identical
-    regression test DESIGN.md describes: this is the POC's SMA strategy,
-    re-expressed as a node graph, exercising the exact same orchestrator
-    sequencing as before."""
+    uses (fast=10/slow=20/max_hold_days=5), exercising the same orchestrator
+    sequencing as production. This file only asserts against the new engine
+    in isolation (trade/snapshot counts, idempotency) — for the actual
+    byte-identical-against-legacy regression DESIGN.md describes, see
+    test_legacy_parity.py, which runs both engines over identical data and
+    diffs their real output."""
     data_cfg = DataConfig()
     sizing = SizingConfig()
     costs = CostsConfig()
